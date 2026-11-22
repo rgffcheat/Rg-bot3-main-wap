@@ -1,0 +1,1088 @@
+import sqlite3, os, time, random, secrets
+from contextlib import contextmanager
+
+DB_PATH = os.getenv("DB_PATH", "data.db")
+
+# key: (fallback emoji, where it is used)
+EMOJI_DEFAULTS = {
+    "top": ("🔝", "Main menu title"),
+    "party": ("🎉", "Welcome line"),
+    "bars": ("📶", "Store highlights title"),
+    "key": ("🔑", "Premium Game Keys"),
+    "fire": ("🔥", "Instant Delivery"),
+    "shield": ("🛡️", "Secure Payments"),
+    "gift": ("🎁", "VIP Rewards"),
+    "h24": ("🕐", "24/7 Support line"),
+    "tap": ("👇", "Tap Product Store line"),
+    "sale": ("💥", "Shop Now button"),
+    "money": ("💰", "Add Balance button / titles"),
+    "history": ("📜", "All History button"),
+    "user": ("👤", "My Profile button"),
+    "share": ("🔗", "Referral button"),
+    "yt": ("▶️", "Tutorial / Watch Video"),
+    "folder": ("📁", "All Update File button"),
+    "support": ("💬", "Support button"),
+    "cart": ("🛒", "Orders"),
+    "diamond": ("💎", "Spent / lifetime spent"),
+    "check": ("✅", "ID / success"),
+    "cancel": ("❌", "Cancel button"),
+    "confirm": ("✅", "Confirm button"),
+    "back": ("➡️", "Back buttons"),
+    "download": ("📥", "Download All Keys"),
+    "telegram": ("✈️", "Chat on Telegram"),
+    "whatsapp": ("📞", "Chat on WhatsApp"),
+    "megaphone": ("📣", "Invite link line"),
+    "chart": ("📊", "Deposit limits"),
+    "calendar": ("📅", "Joined date"),
+    "wallet": ("👛", "Balance"),
+    "info": ("ℹ️", "Notes"),
+    "phone": ("📱", "Phone"),
+    "globe": ("🌐", "Country"),
+    "gift2": ("🎀", "Referral balance"),
+    "fire2": ("🔥", "Name line"),
+    "time": ("⏱", "Order time"),
+    "box": ("📦", "Stock lines"),
+    "bag": ("🛍️", "Buy Now button"),
+    "wait": ("⏳", "Pending payment / admin alerts"),
+    "paid": ("💳", "I Have Paid button"),
+    "qr": ("📲", "QR payment title"),
+    "receipt": ("🧾", "Order summary title"),
+    "idcard": ("🆔", "User ID line"),
+    "coupon": ("🎟️", "Coupon button / line"),
+    "success": ("✅", "Payment successful title"),
+    "txn": ("🔖", "Transaction ID line"),
+    "crown": ("👑", "Account type line"),
+    "ban": ("🚫", "Order line (QR screen)"),
+    "home": ("🏠", "Main Panel button"),
+    "lineup": ("🟧", "Product Lineup title"),
+    "upi": ("💳", "Pay UPI button"),
+    "binance": ("🟡", "Pay Binance button"),
+    "local": ("🏦", "Pay Local (bKash/bank) button"),
+    # ---- V9: every button / line has its OWN slot (nothing is shared any more) ----
+    "b_shop": ("💥", "Menu button: Shop Now"),
+    "b_addbal": ("💰", "Menu button: Add Balance"),
+    "b_history": ("📜", "Menu button: All History"),
+    "b_profile": ("👤", "Menu button: My Profile"),
+    "b_referral": ("🔗", "Menu button: Referral"),
+    "b_tutorial": ("▶️", "Menu button: Tutorial"),
+    "b_update": ("📁", "Menu button: All Update File"),
+    "b_support": ("💬", "Menu button: Support"),
+    "r_title": ("🔗", "Referral screen: title"),
+    "r_money": ("💰", "Referral screen: commission line"),
+    "r_invite": ("📣", "Referral screen: invite link line"),
+    "r_send": ("🔗", "Referral screen: Send Link button + share line"),
+    "t_title": ("▶️", "Tutorial screen: title"),
+    "t_watch": ("▶️", "Tutorial screen: Watch Guide Video button"),
+    # purchase / balance confirmation (what the USER receives)
+    "c_title": ("💎", "Confirmation: title"),
+    "c_details": ("📋", "Confirmation: Order Details heading"),
+    "c_point": ("👇", "Confirmation: pointing hand"),
+    "c_order": ("🛡️", "Confirmation: Order ID"),
+    "c_product": ("🛒", "Confirmation: Product"),
+    "c_plan": ("⏱", "Confirmation: Plan"),
+    "c_date": ("📅", "Confirmation: Date"),
+    "c_time": ("⏰", "Confirmation: Time"),
+    "c_amount": ("💰", "Confirmation: Amount"),
+    "c_status": ("💳", "Confirmation: Payment Status"),
+    "c_ok": ("✅", "Confirmation: Successful tick"),
+    "c_key": ("🔑", "Confirmation: Your License Key"),
+    "c_arrow": ("➡️", "Confirmation: arrow before the key"),
+    "c_addbal": ("🎉", "Confirmation: Add Wallet Balance"),
+    "c_curbal": ("➕", "Confirmation: Current Balance"),
+    "c_shield": ("🛡️", "Confirmation: thank-you line"),
+    "c_rocket": ("🚀", "Confirmation: rocket"),
+    "c_line": ("➖", "Confirmation: divider line (repeated 10 times)"),
+    # admin notifications
+    "n_alert": ("🚨", "Admin alert: siren in the title"),
+    "n_user": ("👤", "Admin alert: Name / User"),
+    "n_link": ("🔗", "Admin alert: Username"),
+    "n_id": ("🆔", "Admin alert: Telegram ID / Chat ID / Order ID"),
+    "n_phone": ("📱", "Admin alert: Phone"),
+    "n_globe": ("🌐", "Admin alert: Country"),
+    "n_type": ("👥", "Admin alert: Account type"),
+    "n_game": ("🎮", "Admin alert: Product / Hack purchased"),
+    "n_plan": ("⏱", "Admin alert: Plan"),
+    "n_money": ("💰", "Admin alert: Price / Amount"),
+    "n_method": ("💳", "Admin alert: Payment method"),
+    "n_key": ("🔑", "Admin alert: Key"),
+    "n_date": ("📅", "Admin alert: Date / Time"),
+    "n_wallet": ("💼", "Admin alert: Wallet / Balance"),
+    "n_cash": ("💵", "Admin alert: Amount added"),
+    "n_diamond": ("💎", "Admin alert: Total hack purchase value"),
+    "n_inbox": ("📥", "Admin alert: Total deposited"),
+    "n_tag": ("🏷️", "Admin alert: UTR / Transaction ID"),
+    "n_fail": ("❌", "Admin alert: Status (key not delivered)"),
+    "n_note": ("📝", "Admin alert: Reason"),
+    "n_chat": ("💬", "Admin alert: Chat ID"),
+    "n_box": ("📦", "Admin alert: Product (failed order)"),
+}
+
+# how the website "Premium Emoji" page groups the slots
+EMOJI_GROUPS = [
+    ("Main menu buttons", ["b_shop", "b_addbal", "b_history", "b_profile", "b_referral", "b_tutorial", "b_update", "b_support"]),
+    ("Main menu text", ["top", "party", "bars", "key", "fire", "shield", "gift", "h24", "tap"]),
+    ("Referral screen", ["r_title", "r_money", "r_invite", "r_send"]),
+    ("Tutorial screen", ["t_title", "t_watch"]),
+    ("Shop & checkout", ["cart", "lineup", "crown", "chart", "time", "money", "receipt", "idcard", "phone", "coupon", "bag",
+                         "upi", "binance", "local", "qr", "back", "home", "cancel", "confirm"]),
+    ("Purchase / balance confirmation (user gets this)", ["c_title", "c_details", "c_point", "c_order", "c_product", "c_plan", "c_date",
+                         "c_time", "c_amount", "c_status", "c_ok", "c_key", "c_arrow", "c_addbal", "c_curbal", "c_shield", "c_rocket", "c_line"]),
+    ("Admin notifications (you get these)", ["n_alert", "n_user", "n_link", "n_id", "n_phone", "n_globe", "n_type", "n_game", "n_plan",
+                         "n_money", "n_method", "n_key", "n_date", "n_wallet", "n_cash", "n_diamond", "n_inbox", "n_tag", "n_fail", "n_note",
+                         "n_chat", "n_box"]),
+]
+
+SETTINGS_DEFAULTS = {
+    "shop_name": "RG CHEAT SHOP",
+    "min_dep": "1",
+    "max_dep": "10000",
+    "ref_reward": "2",
+    "support_tg_on": "1",
+    "support_tg": "",
+    "support_wa_on": "1",
+    "support_wa": "",
+    "tutorial_url": "",
+    "update_url": "",
+    "upi_id": "",
+    "upi_name": "RG CHEAT SHOP",
+    "pay_other_text": "",
+    "ref_percent": "5",
+    "maint": "0",
+    "maint_text": "We are updating the store. Please try again in a few minutes.",
+    "low_stock": "3",
+    "gw_base": "",
+    "gw_token": "",
+    "gw_create_path": "/api/create-order",
+    "gw_check_path": "/api/check-order",
+    "gw_secret": "",
+    "pay_expire": "5",
+    "exp5_done": "0",
+    "pay_name": "RG CHEAT SHOP",
+    "pay_upi_on": "1",
+    "pay_binance_on": "1",
+    "binance_text": "",
+    "bot_token": "",
+    "bot_admin_id": "",
+    "emoji_mode": "ok",
+    "gw_gateway": "paytm",
+    "gw_webhook_secret": "",
+    "gw_connected": "0",
+    "verify_on": "1",
+    "force_inr": "1",
+    "inr_done": "0",
+    "emoji_all_products": "",
+    "emoji_all_plans": "",
+    "emoji_split_done": "0",
+    "notify_chat": "",
+    "notify_purchase": "1",
+    "notify_topup": "1",
+    "notify_newuser": "1",
+    "notify_fail": "1",
+    "panel_url": "https://official2-qg3g.onrender.com",
+    "panel_token": "",
+    "panel_connected": "0",
+    "panel_mk_reseller": "25",
+    "panel_mk_user": "200",
+    "panel_autosync": "1",
+    "panel_sync_min": "60",
+    "panel_last_sync": "0",
+    "shop_bullets": "🛡 Premium Keys\n🔥 Instant Delivery\n🚫 Secure Payment\n💎 24/7 Support",
+    # ---- V12 ----
+    "btn_color": "auto",            # auto = as designed | blue | green | red | plain (all buttons one colour)
+    "deep_bold": "1",               # 1 = shop name / titles in extra-heavy bold
+    "cat_title": "",                # empty = the shop name
+    "cat_text": "🚀 Premium Products for Your Device\n🔥 Find Your Perfect Product!\n🎮 Choose Your Device Category",
+    "cat_other_name": "OTHER PRODUCTS",
+}
+RATES = {"INR": 1, "BDT": 1.4, "PKR": 3.3, "NPR": 1.6, "LKR": 3.6, "AED": 0.044, "USD": 0.012, "GBP": 0.0095}
+for _c, _r in RATES.items():
+    SETTINGS_DEFAULTS["rate_" + _c] = str(_r)
+
+# phone prefix -> (country, currency, symbol)
+COUNTRIES = [
+    ("880", "BD", "BDT", "৳"), ("91", "IN", "INR", "₹"), ("92", "PK", "PKR", "Rs"),
+    ("977", "NP", "NPR", "Rs"), ("94", "LK", "LKR", "Rs"), ("971", "AE", "AED", "AED "),
+    ("1", "US", "USD", "$"), ("44", "GB", "GBP", "£"),
+]
+
+
+DIRTY = {"v": False}
+
+
+@contextmanager
+def conn():
+    c = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    c.row_factory = sqlite3.Row
+    try:
+        yield c
+        c.commit()
+        if c.total_changes:
+            DIRTY["v"] = True
+    finally:
+        c.close()
+
+
+def init():
+    with conn() as c:
+        c.execute("PRAGMA journal_mode=WAL")
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS users(
+            id INTEGER PRIMARY KEY, name TEXT, username TEXT, phone TEXT,
+            country TEXT DEFAULT 'IN', currency TEXT DEFAULT 'INR', symbol TEXT DEFAULT '₹',
+            balance REAL DEFAULT 0, ref_balance REAL DEFAULT 0, ref_by INTEGER,
+            joined INTEGER, verified INTEGER DEFAULT 0, role TEXT DEFAULT 'user', banned INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);
+        CREATE TABLE IF NOT EXISTS user_prices(user_id INTEGER, plan_id INTEGER, price REAL, PRIMARY KEY(user_id, plan_id));
+        CREATE TABLE IF NOT EXISTS emojis(k TEXT PRIMARY KEY, fallback TEXT, eid TEXT DEFAULT '', note TEXT DEFAULT '');
+        CREATE TABLE IF NOT EXISTS orders(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, order_no TEXT, user_id INTEGER,
+            product TEXT, plan TEXT, price REAL, key TEXT, created INTEGER);
+        CREATE TABLE IF NOT EXISTS deposits(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount REAL,
+            status TEXT DEFAULT 'pending', created INTEGER, utr TEXT DEFAULT '', proof TEXT DEFAULT '');
+        CREATE TABLE IF NOT EXISTS products(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, descr TEXT DEFAULT '', active INTEGER DEFAULT 1, sort INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS plans(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER, name TEXT, price REAL DEFAULT 0,
+            rprice REAL DEFAULT 0, active INTEGER DEFAULT 1, sort INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS keys(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER, code TEXT, used INTEGER DEFAULT 0, order_no TEXT);
+        CREATE TABLE IF NOT EXISTS pay_orders(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, pay_no TEXT UNIQUE, token TEXT UNIQUE, user_id INTEGER,
+            kind TEXT, plan_id INTEGER DEFAULT 0, coupon TEXT DEFAULT '', amount REAL, status TEXT DEFAULT 'pending',
+            upi_uri TEXT DEFAULT '', pay_url TEXT DEFAULT '', gw_ref TEXT DEFAULT '', txn TEXT DEFAULT '',
+            chat_id INTEGER DEFAULT 0, msg_id INTEGER DEFAULT 0, order_no TEXT DEFAULT '',
+            title TEXT DEFAULT '', created INTEGER, paid_at INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS coupons(
+            code TEXT PRIMARY KEY, kind TEXT DEFAULT 'percent', value REAL DEFAULT 0, max_uses INTEGER DEFAULT 0,
+            used INTEGER DEFAULT 0, expires INTEGER DEFAULT 0, active INTEGER DEFAULT 1, created INTEGER);
+        CREATE TABLE IF NOT EXISTS coupon_uses(code TEXT, user_id INTEGER, created INTEGER);
+        CREATE TABLE IF NOT EXISTS categories(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, emoji TEXT DEFAULT '', eid TEXT DEFAULT '',
+            sort INTEGER DEFAULT 0, active INTEGER DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS refund_reqs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, plan_id INTEGER, price REAL DEFAULT 0, hold REAL DEFAULT 0,
+            status TEXT DEFAULT 'pending', created INTEGER, decided INTEGER DEFAULT 0);
+        CREATE INDEX IF NOT EXISTS ix_pay_status ON pay_orders(status, created);
+        CREATE INDEX IF NOT EXISTS ix_keys_plan ON keys(plan_id, used);
+        CREATE INDEX IF NOT EXISTS ix_orders_user ON orders(user_id);
+        """)
+        for ddl in ("ALTER TABLE pay_orders ADD COLUMN pay_amount REAL DEFAULT 0",
+                    "ALTER TABLE products ADD COLUMN link TEXT DEFAULT ''",
+                    "ALTER TABLE products ADD COLUMN emoji_id TEXT DEFAULT ''",
+                    "ALTER TABLE pay_orders ADD COLUMN method TEXT DEFAULT 'qr'",
+                    "ALTER TABLE pay_orders ADD COLUMN proof TEXT DEFAULT ''",
+                    "ALTER TABLE products ADD COLUMN api_pid INTEGER DEFAULT 0",
+                    "ALTER TABLE products ADD COLUMN cat_id INTEGER DEFAULT 0",
+                    "ALTER TABLE users ADD COLUMN refund_hold REAL DEFAULT 0",
+                    "ALTER TABLE plans ADD COLUMN api_plan_id INTEGER DEFAULT 0",
+                    "ALTER TABLE plans ADD COLUMN base_price REAL DEFAULT 0",
+                    "ALTER TABLE plans ADD COLUMN manual INTEGER DEFAULT 0",
+                    "ALTER TABLE deposits ADD COLUMN utr TEXT DEFAULT ''",
+                    "ALTER TABLE deposits ADD COLUMN proof TEXT DEFAULT ''"):
+            try:
+                c.execute(ddl)
+            except sqlite3.OperationalError:
+                pass
+        for k, v in SETTINGS_DEFAULTS.items():
+            c.execute("INSERT OR IGNORE INTO settings(k,v) VALUES(?,?)", (k, v))
+        if not (c.execute("SELECT v FROM settings WHERE k='gw_secret'").fetchone()["v"] or "").strip():
+            c.execute("UPDATE settings SET v=? WHERE k='gw_secret'", (secrets.token_hex(12),))
+        for k, (fb, note) in EMOJI_DEFAULTS.items():
+            c.execute("INSERT OR IGNORE INTO emojis(k,fallback,eid,note) VALUES(?,?,?,?)", (k, fb, "", note))
+
+
+# ---------- settings ----------
+def get(k, default=""):
+    with conn() as c:
+        r = c.execute("SELECT v FROM settings WHERE k=?", (k,)).fetchone()
+    return r["v"] if r else default
+
+
+def put(k, v):
+    with conn() as c:
+        c.execute("INSERT INTO settings(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v", (k, v))
+    _gc.clear()
+
+
+_gc = {}
+
+
+def get_c(k, default="", ttl=4):
+    """settings value with a tiny cache (used for things read on every button)"""
+    hit = _gc.get(k)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    v = get(k, default)
+    _gc[k] = (time.time(), v)
+    return v
+
+
+# ---------- emojis ----------
+_ec = {"t": 0, "d": {}}
+CODE_EMOJI = {}          # premium emoji IDs written in main.py (win over website values)
+CODE_ALL_PRODUCTS = ""
+CODE_ALL_PLANS = ""
+
+
+def emoji_clear():
+    _ec["t"] = 0
+
+
+def emoji(key):
+    if time.time() - _ec["t"] > 5:
+        with conn() as c:
+            m = c.execute("SELECT v FROM settings WHERE k='emoji_mode'").fetchone()
+            blocked = bool(m and m["v"] == "blocked")
+            _ec["d"] = {r["k"]: (r["fallback"], "" if blocked else (CODE_EMOJI.get(r["k"]) or r["eid"])) for r in c.execute("SELECT * FROM emojis")}
+            _ec["blocked"] = blocked
+        _ec["t"] = time.time()
+    return _ec["d"].get(key, ("", ""))
+
+
+def emoji_direct(eid, fb=""):
+    """premium emoji by a raw ID (product / plan emoji). Returns (fallback, id) - id is empty when Telegram blocks premium emoji."""
+    emoji("top")
+    return fb, ("" if _ec.get("blocked") else (eid or ""))
+
+
+def emoji_map():
+    """{normal emoji (without variation selector): premium ID}. Built from the slots that have a premium ID
+    (main.py PREMIUM_EMOJI). Used so a normal emoji typed in admin text / category names turns premium by itself."""
+    emoji("top")
+    if _ec.get("blocked"):
+        return {}
+    m = {}
+    for k, (fb, _n) in EMOJI_DEFAULTS.items():
+        e = _ec["d"].get(k)
+        if e and e[1]:
+            m.setdefault(e[0].replace("\ufe0f", ""), e[1])
+            m.setdefault(fb.replace("\ufe0f", ""), e[1])
+    return m
+
+
+def product_eid(p):
+    """emoji ID of a product: its own ID first, else the 'one emoji for ALL products' ID, else ''"""
+    try:
+        own = (p["emoji_id"] or "").strip()
+    except (KeyError, IndexError):
+        own = ""
+    return own or CODE_ALL_PRODUCTS or get("emoji_all_products").strip()
+
+
+def plans_eid():
+    """one premium emoji for every plan: main.py value first, else the website value"""
+    return CODE_ALL_PLANS or get("emoji_all_plans").strip()
+
+
+# ---------- users ----------
+def user(uid):
+    with conn() as c:
+        return c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+
+
+def ensure_user(fr, ref=None):
+    uid = fr["id"]
+    name = (fr.get("first_name") or "") + ((" " + fr["last_name"]) if fr.get("last_name") else "")
+    with conn() as c:
+        r = c.execute("SELECT id FROM users WHERE id=?", (uid,)).fetchone()
+        if not r:
+            refby = ref if (ref and ref != uid and c.execute("SELECT 1 FROM users WHERE id=?", (ref,)).fetchone()) else None
+            c.execute("INSERT INTO users(id,name,username,ref_by,joined) VALUES(?,?,?,?,?)",
+                      (uid, name.strip() or "User", fr.get("username"), refby, int(time.time())))
+        else:
+            c.execute("UPDATE users SET name=?, username=? WHERE id=?", (name.strip() or "User", fr.get("username"), uid))
+    return user(uid)
+
+
+def detect_country(phone):
+    for pre, cc, cur, sym in COUNTRIES:
+        if phone.startswith(pre):
+            return cc, cur, sym
+    return "XX", "USD", "$"
+
+
+def verify(uid, phone):
+    """Marks verified. Returns referrer id if this verification should pay a referral reward."""
+    cc, cur, sym = detect_country(phone)
+    if get("force_inr") == "1":
+        cur, sym = "INR", "₹"
+    with conn() as c:
+        u = c.execute("SELECT verified, ref_by FROM users WHERE id=?", (uid,)).fetchone()
+        first = u and not u["verified"]
+        c.execute("UPDATE users SET phone=?, country=?, currency=?, symbol=?, verified=1 WHERE id=?",
+                  (phone, cc, cur, sym, uid))
+        if first and u["ref_by"]:
+            return u["ref_by"]
+    return None
+
+
+def autoverify(u):
+    """when phone verification is switched OFF every user counts as verified"""
+    if u and not u["verified"] and get("verify_on") == "0":
+        with conn() as c:
+            c.execute("UPDATE users SET verified=1 WHERE id=?", (u["id"],))
+        return user(u["id"])
+    return u
+
+
+def migrate_inr():
+    """prices are INR only: convert old foreign-currency users once"""
+    if get("exp5_done") != "1":
+        put("pay_expire", "5")
+        put("exp5_done", "1")
+    with conn() as c:
+        c.execute("UPDATE emojis SET fallback='👇' WHERE k='tap' AND fallback='👆'")
+    if get("force_inr") != "1" or get("inr_done") == "1":
+        return
+    with conn() as c:
+        for r in c.execute("SELECT id, balance, ref_balance, currency FROM users WHERE currency<>'INR'").fetchall():
+            k = rate(r["currency"]) or 1
+            c.execute("UPDATE users SET balance=?, ref_balance=?, currency='INR', symbol='₹' WHERE id=?",
+                      (round(r["balance"] / k, 2), round(r["ref_balance"] / k, 2), r["id"]))
+    put("inr_done", "1")
+
+
+def migrate_v9():
+    """V9: buttons got their own emoji slots. Old IDs are copied once.
+    The Referral slots (b_referral, r_title, r_send) start EMPTY on purpose - set them fresh in Premium Emoji."""
+    if get("emoji_split_done") == "1":
+        return
+    copy = {"b_shop": "sale", "b_addbal": "money", "b_history": "history", "b_profile": "user", "b_tutorial": "yt",
+            "b_update": "folder", "b_support": "support", "r_money": "money", "r_invite": "megaphone",
+            "t_title": "yt", "t_watch": "yt"}
+    with conn() as c:
+        for new, old in copy.items():
+            o = c.execute("SELECT eid FROM emojis WHERE k=?", (old,)).fetchone()
+            if o and o["eid"]:
+                c.execute("UPDATE emojis SET eid=? WHERE k=? AND eid=''", (o["eid"], new))
+    put("emoji_split_done", "1")
+    emoji_clear()
+
+
+def find_order(q):
+    """admin search: payment order ID (ORD…), shop order (WAL…), transaction ID or user ID -> which user"""
+    q = (q or "").strip()
+    if not q:
+        return []
+    like = f"%{q}%"
+    out = []
+    with conn() as c:
+        for p in c.execute("""SELECT p.*, u.name uname, u.username uusername, u.phone uphone, u.balance ubal
+                              FROM pay_orders p LEFT JOIN users u ON u.id=p.user_id
+                              WHERE p.pay_no LIKE ? OR p.txn LIKE ? OR p.gw_ref LIKE ? OR p.order_no LIKE ? OR CAST(p.user_id AS TEXT)=?
+                              ORDER BY p.id DESC LIMIT 20""", (like, like, like, like, q)).fetchall():
+            out.append({"kind": "PAYMENT ORDER", "ref": p["pay_no"], "uid": p["user_id"], "uname": p["uname"], "username": p["uusername"],
+                        "phone": p["uphone"], "balance": p["ubal"] or 0,
+                        "info": [("Status", p["status"]), ("Method", p["method"]), ("For", "Wallet top-up" if p["kind"] == "topup" else p["title"]),
+                                 ("Amount", f"₹{(p['pay_amount'] or p['amount']):.2f}"), ("Txn ID", p["txn"] or "-"),
+                                 ("Shop order", p["order_no"] or "-"), ("Created", time.strftime("%d %b %H:%M", time.gmtime(p["created"] + 19800)) + " IST")]})
+        for o in c.execute("""SELECT o.*, u.name uname, u.username uusername, u.phone uphone, u.balance ubal
+                              FROM orders o LEFT JOIN users u ON u.id=o.user_id WHERE o.order_no LIKE ? ORDER BY o.id DESC LIMIT 20""", (like,)).fetchall():
+            out.append({"kind": "SHOP ORDER", "ref": o["order_no"], "uid": o["user_id"], "uname": o["uname"], "username": o["uusername"],
+                        "phone": o["uphone"], "balance": o["ubal"] or 0,
+                        "info": [("Product", f"{o['product']} · {o['plan']}"), ("Paid", f"₹{o['price']:.2f}"),
+                                 ("Time", time.strftime("%d %b %H:%M", time.gmtime(o["created"] + 19800)) + " IST")]})
+    return out
+
+
+def plan_link(plan_id):
+    with conn() as c:
+        r = c.execute("SELECT p.link FROM plans pl JOIN products p ON p.id=pl.product_id WHERE pl.id=?", (plan_id,)).fetchone()
+    return (r["link"] if r else "") or ""
+
+
+def add_ref_balance(uid, amt):
+    with conn() as c:
+        c.execute("UPDATE users SET ref_balance=ref_balance+? WHERE id=?", (amt, uid))
+
+
+def stats(uid):
+    with conn() as c:
+        o = c.execute("SELECT COUNT(*) n, COALESCE(SUM(price),0) s FROM orders WHERE user_id=?", (uid,)).fetchone()
+        d = c.execute("SELECT COALESCE(SUM(amount),0) s FROM deposits WHERE user_id=? AND status='paid'", (uid,)).fetchone()
+    return o["n"], o["s"], d["s"]
+
+
+def orders(uid, since=None):
+    with conn() as c:
+        if since:
+            return c.execute("SELECT * FROM orders WHERE user_id=? AND created>=? ORDER BY id DESC", (uid, since)).fetchall()
+        return c.execute("SELECT * FROM orders WHERE user_id=? ORDER BY id DESC", (uid,)).fetchall()
+
+
+# ---------- keypad + temporary state (memory only) ----------
+_mem = {"kp": {}, "st": {}}
+
+
+def kp_get(uid):
+    return _mem["kp"].get(uid, "")
+
+
+def kp_set(uid, amt):
+    _mem["kp"][uid] = amt
+
+
+def st_get(uid):
+    return _mem["st"].get(uid, "")
+
+
+def st_set(uid, v):
+    _mem["st"][uid] = v
+
+
+# ---------- shop ----------
+def rate(cur):
+    try:
+        return float(get("rate_" + cur, "1"))
+    except ValueError:
+        return 1.0
+
+
+def price_for(u, pl):
+    base = None
+    try:                                                  # V18: custom price for this user (set on his profile)
+        with conn() as c:
+            r = c.execute("SELECT price FROM user_prices WHERE user_id=? AND plan_id=?", (u["id"], pl["id"])).fetchone()
+        if r and r["price"] and r["price"] > 0:
+            base = r["price"]
+    except Exception:
+        base = None
+    if base is None:
+        base = pl["rprice"] if (u["role"] == "reseller" and pl["rprice"] and pl["rprice"] > 0) else pl["price"]
+    return round(base * rate(u["currency"]), 2)
+
+
+def user_prices(uid):
+    """{plan_id: custom base price} of one user"""
+    with conn() as c:
+        return {r["plan_id"]: r["price"] for r in c.execute("SELECT plan_id, price FROM user_prices WHERE user_id=?", (uid,))}
+
+
+def save_user_prices(uid, values):
+    """values = {plan_id: '12.5' | ''}. blank = back to the normal price. Returns (saved, cleared, bad)."""
+    saved = cleared = bad = 0
+    with conn() as c:
+        for plid, v in values.items():
+            v = (v or "").strip()
+            if not v:
+                cleared += c.execute("DELETE FROM user_prices WHERE user_id=? AND plan_id=?", (uid, plid)).rowcount
+                continue
+            try:
+                p = round(float(v), 2)
+            except ValueError:
+                bad += 1
+                continue
+            if p <= 0:
+                bad += 1
+                continue
+            c.execute("INSERT INTO user_prices(user_id, plan_id, price) VALUES(?,?,?) "
+                      "ON CONFLICT(user_id, plan_id) DO UPDATE SET price=excluded.price", (uid, plid, p))
+            saved += 1
+    return saved, cleared, bad
+
+
+def products(active_only=True, cat_id=None):
+    q = """SELECT p.*,
+      (SELECT COUNT(*) FROM keys k JOIN plans pl ON pl.id=k.plan_id WHERE pl.product_id=p.id AND k.used=0)
+        + (SELECT COUNT(*) * 999999 FROM plans pl WHERE pl.product_id=p.id AND pl.active=1 AND pl.api_plan_id>0) stock,
+      (SELECT COUNT(*) FROM plans pl WHERE pl.product_id=p.id) nplans FROM products p"""
+    where = []
+    if active_only:
+        where.append("p.active=1")
+    if cat_id is not None:
+        # 0 = products without a (still existing) category
+        where.append("(p.cat_id=0 OR p.cat_id NOT IN (SELECT id FROM categories))" if not cat_id else f"p.cat_id={int(cat_id)}")
+    if where:
+        q += " WHERE " + " AND ".join(where)
+    with conn() as c:
+        return c.execute(q + " ORDER BY p.sort, p.id").fetchall()
+
+
+def cats(active_only=True):
+    q = "SELECT c.*, (SELECT COUNT(*) FROM products p WHERE p.cat_id=c.id) nprod FROM categories c"
+    if active_only:
+        q += " WHERE c.active=1"
+    with conn() as c:
+        return c.execute(q + " ORDER BY c.sort, c.id").fetchall()
+
+
+def cat(cid):
+    with conn() as c:
+        return c.execute("SELECT * FROM categories WHERE id=?", (cid,)).fetchone()
+
+
+def product(pid):
+    with conn() as c:
+        return c.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
+
+
+def plans_of(pid, active_only=True):
+    q = """SELECT pl.*, CASE WHEN pl.api_plan_id>0 THEN 999999 ELSE (SELECT COUNT(*) FROM keys k WHERE k.plan_id=pl.id AND k.used=0) END stock,
+           (SELECT COUNT(*) FROM keys k WHERE k.plan_id=pl.id AND k.used=1) sold
+           FROM plans pl WHERE pl.product_id=?"""
+    if active_only:
+        q += " AND pl.active=1"
+    with conn() as c:
+        return c.execute(q + " ORDER BY pl.sort, pl.id", (pid,)).fetchall()
+
+
+def plan(plid):
+    with conn() as c:
+        return c.execute("""SELECT pl.*, p.name pname, p.active pactive,
+            CASE WHEN pl.api_plan_id>0 THEN 999999 ELSE (SELECT COUNT(*) FROM keys k WHERE k.plan_id=pl.id AND k.used=0) END stock
+            FROM plans pl JOIN products p ON p.id=pl.product_id WHERE pl.id=?""", (plid,)).fetchone()
+
+
+def add_keys(plan_id, text):
+    lines, seen = [], set()
+    for ln in text.splitlines():
+        ln = ln.strip()
+        if ln and ln not in seen:
+            seen.add(ln)
+            lines.append(ln)
+    n = 0
+    with conn() as c:
+        have = {r["code"] for r in c.execute("SELECT code FROM keys WHERE plan_id=? AND used=0", (plan_id,))}
+        for ln in lines:
+            if ln not in have:
+                c.execute("INSERT INTO keys(plan_id,code) VALUES(?,?)", (plan_id, ln))
+                n += 1
+    return n
+
+
+def new_order_no():
+    return "WAL" + time.strftime("%Y%m%d%H%M%S") + "".join(random.choice("0123456789") for _ in range(9))
+
+
+def _coupon_discount(c, u, pl, code, base):
+    """returns (discount, err). Runs inside an open connection."""
+    cp = c.execute("SELECT * FROM coupons WHERE code=?", (code.upper(),)).fetchone()
+    if not cp or not cp["active"]:
+        return 0, "Invalid coupon code."
+    if cp["expires"] and cp["expires"] < time.time():
+        return 0, "This coupon has expired."
+    if cp["max_uses"] and cp["used"] >= cp["max_uses"]:
+        return 0, "This coupon has been fully used."
+    if c.execute("SELECT 1 FROM coupon_uses WHERE code=? AND user_id=?", (cp["code"], u["id"])).fetchone():
+        return 0, "You have already used this coupon."
+    if cp["kind"] == "percent":
+        d = base * min(cp["value"], 100) / 100
+    else:
+        d = cp["value"] * rate(u["currency"])
+    return round(min(d, base), 2), ""
+
+
+def coupon_calc(u, pl, code):
+    """Preview for the order summary. Returns (final_price, discount, err)."""
+    base = price_for(u, pl)
+    if not code:
+        return base, 0, ""
+    with conn() as c:
+        d, err = _coupon_discount(c, u, pl, code, base)
+    if err:
+        return base, 0, err
+    return round(base - d, 2), d, ""
+
+
+_mem["cp"] = {}
+
+
+def cp_set(uid, plid, code):
+    _mem["cp"][uid] = (plid, code)
+
+
+def cp_get(uid, plid):
+    v = _mem["cp"].get(uid)
+    return v[1] if v and v[0] == plid else ""
+
+
+def buy(uid, plan_id, coupon="", ext_price=None):
+    """Atomic purchase. ext_price = amount already paid by QR (wallet is not charged).
+    Returns ('ok', order, stock_left) | ('bal', price) | ('stock',) | ('gone',) | ('coupon', msg) | ('refund', amount)"""
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        u = c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        pl = c.execute("""SELECT pl.*, p.name pname FROM plans pl JOIN products p ON p.id=pl.product_id
+                          WHERE pl.id=? AND pl.active=1 AND p.active=1""", (plan_id,)).fetchone()
+        if not u or not pl:
+            if ext_price and u:
+                c.execute("UPDATE users SET balance=ROUND(balance+?,2), refund_hold=ROUND(COALESCE(refund_hold,0)+?,2) WHERE id=?", (ext_price, ext_price, uid))
+                return ("refund", ext_price)
+            return ("gone",)
+        price = price_for(u, pl)
+        if ext_price is not None:
+            price = ext_price
+        elif coupon:
+            d, err = _coupon_discount(c, u, pl, coupon, price)
+            if err:
+                return ("coupon", err)
+            price = round(price - d, 2)
+        if ext_price is None and u["balance"] < price:
+            return ("bal", price)
+        k = c.execute("SELECT id, code FROM keys WHERE plan_id=? AND used=0 ORDER BY id LIMIT 1", (plan_id,)).fetchone()
+        if not k:
+            if ext_price is not None:
+                c.execute("UPDATE users SET balance=ROUND(balance+?,2), refund_hold=ROUND(COALESCE(refund_hold,0)+?,2) WHERE id=?", (ext_price, ext_price, uid))
+                return ("refund", ext_price)
+            return ("stock",)
+        no = new_order_no()
+        c.execute("UPDATE keys SET used=1, order_no=? WHERE id=?", (no, k["id"]))
+        if ext_price is None:
+            c.execute("UPDATE users SET balance=ROUND(balance-?,2) WHERE id=?", (price, uid))
+        if coupon and ext_price is None:
+            c.execute("UPDATE coupons SET used=used+1 WHERE code=?", (coupon.upper(),))
+            c.execute("INSERT INTO coupon_uses(code,user_id,created) VALUES(?,?,?)", (coupon.upper(), uid, int(time.time())))
+        now = int(time.time())
+        c.execute("INSERT INTO orders(order_no,user_id,product,plan,price,key,created) VALUES(?,?,?,?,?,?,?)",
+                  (no, uid, pl["pname"], pl["name"], price, k["code"], now))
+        left = c.execute("SELECT COUNT(*) FROM keys WHERE plan_id=? AND used=0", (plan_id,)).fetchone()[0]
+        order = {"order_no": no, "product": pl["pname"], "plan": pl["name"], "price": price, "key": k["code"],
+                 "created": now, "plan_id": plan_id}
+        return ("ok", order, left)
+
+
+def api_reserve(uid, plan_id, coupon="", ext_price=None):
+    """Panel-API plan, step 1 (atomic): check everything and take the money from the wallet.
+    ext_price = already paid by QR/UPI (wallet not charged).
+    Returns ('go', price, plan_row) | ('bal', price) | ('coupon', msg) | ('gone',) | ('refund', amount)"""
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        u = c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        pl = c.execute("""SELECT pl.*, p.name pname FROM plans pl JOIN products p ON p.id=pl.product_id
+                          WHERE pl.id=? AND pl.active=1 AND p.active=1 AND pl.api_plan_id>0""", (plan_id,)).fetchone()
+        if not u or not pl:
+            if ext_price and u:
+                c.execute("UPDATE users SET balance=ROUND(balance+?,2), refund_hold=ROUND(COALESCE(refund_hold,0)+?,2) WHERE id=?", (ext_price, ext_price, uid))
+                return ("refund", ext_price)
+            return ("gone",)
+        price = price_for(u, pl)
+        if ext_price is not None:
+            price = ext_price
+        elif coupon:
+            d, err = _coupon_discount(c, u, pl, coupon, price)
+            if err:
+                return ("coupon", err)
+            price = round(price - d, 2)
+        if ext_price is None:
+            if u["balance"] < price:
+                return ("bal", price)
+            c.execute("UPDATE users SET balance=ROUND(balance-?,2) WHERE id=?", (price, uid))
+        return ("go", price, pl)
+
+
+def api_finish_ok(uid, pl, price, key, coupon="", ext_price=None):
+    """Panel-API plan, step 2: the panel returned a key -> save the order. Same result as buy()."""
+    no, now = new_order_no(), int(time.time())
+    order = {"order_no": no, "product": pl["pname"], "plan": pl["name"], "price": price, "key": key,
+             "created": now, "plan_id": pl["id"]}
+    try:
+        with conn() as c:
+            c.execute("INSERT INTO orders(order_no,user_id,product,plan,price,key,created) VALUES(?,?,?,?,?,?,?)",
+                      (no, uid, pl["pname"], pl["name"], price, key, now))
+            if coupon and ext_price is None:
+                c.execute("UPDATE coupons SET used=used+1 WHERE code=?", (coupon.upper(),))
+                c.execute("INSERT INTO coupon_uses(code,user_id,created) VALUES(?,?,?)", (coupon.upper(), uid, now))
+    except Exception:
+        import traceback
+        traceback.print_exc()        # the key must still reach the customer
+    return ("ok", order, 999999)
+
+
+def coupon_consume(uid, code):
+    """used when a coupon-priced purchase is paid by QR"""
+    if not code:
+        return
+    with conn() as c:
+        c.execute("UPDATE coupons SET used=used+1 WHERE code=?", (code.upper(),))
+        c.execute("INSERT INTO coupon_uses(code,user_id,created) VALUES(?,?,?)", (code.upper(), uid, int(time.time())))
+
+
+# ---------- QR / gateway payment orders ----------
+def pay_new_no():
+    return ("ORD" + time.strftime("%Y%m%d%H%M%S") + "".join(random.choice("0123456789") for _ in range(5))
+            + random.choice("ABCDEFGHJKLMNPQRSTUVWXYZ"))
+
+
+def pay_create(uid, kind, amount, plan_id=0, coupon="", title="", method="qr"):
+    no, tok = pay_new_no(), secrets.token_urlsafe(18)
+    with conn() as c:
+        # only one open payment per user: close older ones
+        c.execute("UPDATE pay_orders SET status='cancelled' WHERE user_id=? AND status='pending'", (uid,))
+        c.execute("""INSERT INTO pay_orders(pay_no,token,user_id,kind,plan_id,coupon,amount,title,created,method)
+                     VALUES(?,?,?,?,?,?,?,?,?,?)""", (no, tok, uid, kind, plan_id, coupon, amount, title, int(time.time()), method))
+    return pay_get(no)
+
+
+def pay_get(no):
+    with conn() as c:
+        return c.execute("SELECT * FROM pay_orders WHERE pay_no=?", (no,)).fetchone()
+
+
+def pay_by_token(tok):
+    with conn() as c:
+        return c.execute("SELECT * FROM pay_orders WHERE token=?", (tok,)).fetchone()
+
+
+def pay_update(no, **kw):
+    if not kw:
+        return
+    with conn() as c:
+        c.execute("UPDATE pay_orders SET " + ",".join(f"{k}=?" for k in kw) + " WHERE pay_no=?", (*kw.values(), no))
+
+
+def pay_resolve(no, txn=""):
+    """pending/expired -> paid exactly once (late payments are still honoured). Returns the row if THIS call did it."""
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        p = c.execute("SELECT * FROM pay_orders WHERE pay_no=? AND status IN ('pending','expired','review')", (no,)).fetchone()
+        if not p:
+            return None
+        c.execute("UPDATE pay_orders SET status='paid', txn=?, paid_at=? WHERE pay_no=?", (txn or "", int(time.time()), no))
+        return p
+
+
+def pay_pending():
+    """only automatic (gateway QR) payments are watched; manual ones wait for the admin"""
+    with conn() as c:
+        return c.execute("SELECT * FROM pay_orders WHERE status='pending' AND method='qr' ORDER BY id").fetchall()
+
+
+def pay_submit(no, txn, proof):
+    with conn() as c:
+        c.execute("UPDATE pay_orders SET status='review', txn=?, proof=? WHERE pay_no=? AND status='pending'", (txn, proof, no))
+
+
+def pay_txn_used(txn):
+    with conn() as c:
+        a = c.execute("SELECT 1 FROM pay_orders WHERE txn=? AND txn<>'' AND status IN ('review','paid')", (txn,)).fetchone()
+        b = c.execute("SELECT 1 FROM deposits WHERE utr=? AND utr<>'' AND status IN ('review','paid')", (txn,)).fetchone()
+    return bool(a or b)
+
+
+def pay_reject(no):
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        p = c.execute("SELECT * FROM pay_orders WHERE pay_no=? AND status IN ('pending','review','expired')", (no,)).fetchone()
+        if not p:
+            return None
+        c.execute("UPDATE pay_orders SET status='rejected' WHERE pay_no=?", (no,))
+        return p
+
+
+def add_balance(uid, amt):
+    with conn() as c:
+        c.execute("UPDATE users SET balance=ROUND(balance+?,2) WHERE id=?", (amt, uid))
+
+
+# ---------- V13: refund hold (refunded money needs admin approval before it can be spent) ----------
+def hold_of(u):
+    """part of the wallet that is a refund waiting for admin approval"""
+    try:
+        return round(max(0.0, min(float(u["refund_hold"] or 0), float(u["balance"] or 0))), 2)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return 0.0
+
+
+def add_refund(uid, amt):
+    """money back after a failed order that was paid by QR / UPI / Binance: wallet + refund hold"""
+    with conn() as c:
+        c.execute("UPDATE users SET balance=ROUND(balance+?,2), refund_hold=ROUND(COALESCE(refund_hold,0)+?,2) WHERE id=?", (amt, amt, uid))
+
+
+def rq_create(uid, plan_id, price, hold):
+    """new approval request. None if this user already has one waiting."""
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        if c.execute("SELECT 1 FROM refund_reqs WHERE user_id=? AND status='pending'", (uid,)).fetchone():
+            return None
+        return c.execute("INSERT INTO refund_reqs(user_id,plan_id,price,hold,created) VALUES(?,?,?,?,?)",
+                         (uid, plan_id, price, hold, int(time.time()))).lastrowid
+
+
+def rq_get(rid):
+    with conn() as c:
+        return c.execute("SELECT * FROM refund_reqs WHERE id=?", (rid,)).fetchone()
+
+
+def _hold_apply(c, uid, ok):
+    u = c.execute("SELECT balance, refund_hold FROM users WHERE id=?", (uid,)).fetchone()
+    if not u:
+        return 0.0
+    hold = round(max(0.0, min(float(u["refund_hold"] or 0), float(u["balance"] or 0))), 2)
+    if ok:      # approved: the refunded money becomes normal wallet money
+        c.execute("UPDATE users SET refund_hold=0 WHERE id=?", (uid,))
+    else:       # rejected: ALL refunded money is taken back
+        c.execute("UPDATE users SET balance=ROUND(balance-?,2), refund_hold=0 WHERE id=?", (hold, uid))
+    return hold
+
+
+def rq_decide(rid, ok):
+    """Approve / Reject one request. Runs once. Returns (request row, amount) or None if already decided."""
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        r = c.execute("SELECT * FROM refund_reqs WHERE id=?", (rid,)).fetchone()
+        if not r or r["status"] != "pending":
+            return None
+        hold = _hold_apply(c, r["user_id"], ok)
+        c.execute("UPDATE refund_reqs SET status=?, decided=?, hold=? WHERE id=?", ("approved" if ok else "rejected", int(time.time()), hold, rid))
+        return r, hold
+
+
+def hold_decide(uid, ok):
+    """same, from the website Users page (no request needed). Returns the amount."""
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        hold = _hold_apply(c, uid, ok)
+        c.execute("UPDATE refund_reqs SET status=?, decided=? WHERE user_id=? AND status='pending'",
+                  ("approved" if ok else "rejected", int(time.time()), uid))
+        return hold
+
+
+def dep_record_paid(uid, amt, txn):
+    """so 'Total deposited' counts QR top-ups"""
+    with conn() as c:
+        c.execute("INSERT INTO deposits(user_id,amount,status,created,utr) VALUES(?,?,'paid',?,?)",
+                  (uid, amt, int(time.time()), txn or ""))
+
+
+# ---------- deposits ----------
+def dep_create(uid, amt):
+    with conn() as c:
+        c.execute("UPDATE deposits SET status='cancelled' WHERE user_id=? AND status='pending'", (uid,))
+        cur = c.execute("INSERT INTO deposits(user_id,amount,status,created) VALUES(?,?,'pending',?)",
+                        (uid, amt, int(time.time())))
+        return cur.lastrowid
+
+
+def dep_get(did):
+    with conn() as c:
+        return c.execute("SELECT * FROM deposits WHERE id=?", (did,)).fetchone()
+
+
+def dep_utr_used(utr):
+    with conn() as c:
+        return c.execute("SELECT 1 FROM deposits WHERE utr=? AND utr<>'' AND status IN ('review','paid')", (utr,)).fetchone() is not None
+
+
+def dep_submit(did, utr, proof):
+    with conn() as c:
+        c.execute("UPDATE deposits SET status='review', utr=?, proof=? WHERE id=? AND status='pending'", (utr, proof, did))
+
+
+def dep_cancel(did, uid):
+    with conn() as c:
+        c.execute("UPDATE deposits SET status='cancelled' WHERE id=? AND user_id=? AND status='pending'", (did, uid))
+
+
+def dep_resolve(did, ok):
+    """Approve/reject once. Returns the deposit row if this call changed it, else None."""
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        d = c.execute("SELECT * FROM deposits WHERE id=? AND status IN ('pending','review')", (did,)).fetchone()
+        if not d:
+            return None
+        c.execute("UPDATE deposits SET status=? WHERE id=?", ("paid" if ok else "rejected", did))
+        if ok:
+            c.execute("UPDATE users SET balance=ROUND(balance+?,2) WHERE id=?", (d["amount"], d["user_id"]))
+        return d
+
+
+# ---------- referral commission / claim ----------
+def pay_commission(buyer_id, price):
+    """Give the referrer a % of the purchase. Returns (referrer_id, amount_in_referrer_currency) or None."""
+    try:
+        pct = float(get("ref_percent", "0"))
+    except ValueError:
+        pct = 0
+    if pct <= 0:
+        return None
+    with conn() as c:
+        b = c.execute("SELECT ref_by, currency FROM users WHERE id=?", (buyer_id,)).fetchone()
+        if not b or not b["ref_by"]:
+            return None
+        r = c.execute("SELECT id, currency FROM users WHERE id=?", (b["ref_by"],)).fetchone()
+        if not r:
+            return None
+        amt = round(price / rate(b["currency"]) * rate(r["currency"]) * pct / 100, 2)
+        if amt <= 0:
+            return None
+        c.execute("UPDATE users SET ref_balance=ref_balance+? WHERE id=?", (amt, r["id"]))
+        return r["id"], amt
+
+
+def claim_ref(uid):
+    with conn() as c:
+        c.execute("BEGIN IMMEDIATE")
+        u = c.execute("SELECT ref_balance FROM users WHERE id=?", (uid,)).fetchone()
+        if not u or u["ref_balance"] <= 0:
+            return 0
+        amt = u["ref_balance"]
+        c.execute("UPDATE users SET balance=balance+?, ref_balance=0 WHERE id=?", (amt, uid))
+        return amt
+
+
+def broadcast_targets():
+    with conn() as c:
+        return [r["id"] for r in c.execute("SELECT id FROM users WHERE verified=1 AND banned=0")]
+
+
+# ---------- V17: user search / profile ----------
+_UIDX = {"v": False}
+
+
+def search_users(q="", flt="all", sort="new", limit=30, offset=0):
+    """search by Telegram ID (= chat ID), phone, @username or name. Returns (rows, total).
+    each row also has hacks (orders bought) and spent."""
+    import re as _re
+    if not _UIDX["v"]:
+        with conn() as c:
+            c.execute("CREATE INDEX IF NOT EXISTS orders_uid ON orders(user_id)")
+            c.execute("CREATE INDEX IF NOT EXISTS deposits_uid ON deposits(user_id)")
+        _UIDX["v"] = True
+    where, args = [], []
+    q = (q or "").strip()
+    if q:
+        qq = q.lstrip("@")
+        conds, a = ["name LIKE ?", "username LIKE ?"], [f"%{q}%", f"%{qq}%"]
+        digits = _re.sub(r"\D", "", q) if _re.fullmatch(r"[+\d\s\-()]+", q) else ""     # numbers only when the search itself is a number
+        if digits:
+            conds += ["CAST(id AS TEXT) LIKE ?", "REPLACE(REPLACE(COALESCE(phone,''),'+',''),' ','') LIKE ?"]
+            a += [f"%{digits}%", f"%{digits}%"]
+        where.append("(" + " OR ".join(conds) + ")")
+        args += a
+    where.append({"res": "role='reseller'", "usr": "(role IS NULL OR role!='reseller')", "ban": "banned=1",
+                  "unv": "verified=0"}.get(flt, "1=1"))
+    order = {"spent": "spent DESC", "bal": "balance DESC", "orders": "hacks DESC"}.get(sort, "joined DESC")
+    w = " AND ".join(where)
+    with conn() as c:
+        total = c.execute(f"SELECT COUNT(*) FROM users WHERE {w}", args).fetchone()[0]
+        rows = c.execute(f"""SELECT * FROM (SELECT u.*, (SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id) hacks,
+                             (SELECT COALESCE(SUM(price),0) FROM orders o WHERE o.user_id=u.id) spent FROM users u WHERE {w})
+                             ORDER BY {order} LIMIT ? OFFSET ?""", args + [limit, offset]).fetchall()
+    return rows, total
+
+
+def user_counts():
+    with conn() as c:
+        r = c.execute("""SELECT COUNT(*) a, SUM(role='reseller') r, SUM(banned=1) b, SUM(verified=0) v FROM users""").fetchone()
+    return {"all": r["a"] or 0, "res": r["r"] or 0, "usr": (r["a"] or 0) - (r["r"] or 0), "ban": r["b"] or 0, "unv": r["v"] or 0}
+
+
+def user_profile(uid):
+    """everything about one user (A to Z)"""
+    with conn() as c:
+        u = c.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+        if not u:
+            return None
+        o = c.execute("SELECT COUNT(*) n, COALESCE(SUM(price),0) s, MIN(created) f, MAX(created) l FROM orders WHERE user_id=?", (uid,)).fetchone()
+        dep = c.execute("SELECT COALESCE(SUM(amount),0) FROM deposits WHERE user_id=? AND status='paid'", (uid,)).fetchone()[0]
+        return {
+            "u": u, "hacks": o["n"], "spent": o["s"], "first": o["f"], "last": o["l"], "deposited": dep,
+            "by_product": c.execute("SELECT product, COUNT(*) n, SUM(price) s FROM orders WHERE user_id=? GROUP BY product ORDER BY n DESC", (uid,)).fetchall(),
+            "orders": c.execute("SELECT * FROM orders WHERE user_id=? ORDER BY id DESC LIMIT 500", (uid,)).fetchall(),
+            "deposits": c.execute("SELECT * FROM deposits WHERE user_id=? ORDER BY id DESC LIMIT 300", (uid,)).fetchall(),
+            "refs": c.execute("SELECT id,name,username,joined FROM users WHERE ref_by=? ORDER BY joined DESC LIMIT 100", (uid,)).fetchall(),
+            "nrefs": c.execute("SELECT COUNT(*) FROM users WHERE ref_by=?", (uid,)).fetchone()[0],
+            "refby": c.execute("SELECT id,name FROM users WHERE id=?", (u["ref_by"],)).fetchone() if u["ref_by"] else None,
+        }
