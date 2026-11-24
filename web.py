@@ -4,13 +4,14 @@ from datetime import datetime, timezone, timedelta
 from jinja2 import DictLoader
 import io, csv, threading
 import json
-import db, bot, backup, gateway, panel, secure
+import db, bot, backup, gateway, panel, secure, rgapi
 try:
     import segno
 except Exception:
     segno = None
 
 app = Flask(__name__)
+app.register_blueprint(rgapi.bp)          # V20: RGAPI (/api/v1/* and /rgapi/*) has its own token / Telegram sign-in
 app.secret_key = os.getenv("SECRET_KEY") or secrets.token_hex(32)
 ADMIN_USER = os.getenv("ADMIN_USER") or "RGCHEAT"
 ADMIN_PASS = os.getenv("ADMIN_PASS") or "909090"
@@ -91,7 +92,7 @@ body.nav .side{transform:none}body.nav:after{content:"";position:fixed;inset:0;b
 .top button{margin:0;padding:7px 12px;font-size:18px;background:var(--card2);border:1px solid var(--line)}
 main{padding:16px 14px 90px}h1{font-size:19px}.bar{top:54px}}
 </style></head><body>
-{% if session.get('ok') %}{% set nav = [('Overview',[('home','/','📊','Dashboard')]),('Store',[('products','/products','🛍️','Products'),('categories','/categories','🗂️','Categories'),('panel','/panel','🔌','Panel API'),('coupons','/coupons','🎟️','Coupons')]),('Sales',[('orders','/orders','🧾','Orders'),('payments','/payments','💳','QR Payments'),('deposits','/deposits','💰','Deposits'),('find','/find','🔎','Find Order')]),('Customers',[('users','/users','👥','Users'),('broadcast','/broadcast','📣','Broadcast')]),('System',[('settings','/settings','⚙️','Settings'),('botcfg','/botcfg','🤖','Bot Token'),('backup','/backup','💾','Backup')])] %}
+{% if session.get('ok') %}{% set nav = [('Overview',[('home','/','📊','Dashboard')]),('Store',[('products','/products','🛍️','Products'),('categories','/categories','🗂️','Categories'),('panel','/panel','🔌','Panel API'),('coupons','/coupons','🎟️','Coupons')]),('Sales',[('orders','/orders','🧾','Orders'),('payments','/payments','💳','QR Payments'),('deposits','/deposits','💰','Deposits'),('find','/find','🔎','Find Order')]),('Customers',[('users','/users','👥','Users'),('rgapi','/rgapi-admin','🔑','RGAPI'),('broadcast','/broadcast','📣','Broadcast')]),('System',[('settings','/settings','⚙️','Settings'),('botcfg','/botcfg','🤖','Bot Token'),('backup','/backup','💾','Backup')])] %}
 <div class="app"><aside class="side"><div class="brand"><i>🎮</i><span>RG Admin</span></div>
 {% for g, items in nav %}<div class="grp">{{ g }}</div>{% for k, u, ic, nm in items %}<a class="nl {{ 'on' if tab==k }}" href="{{ u }}"><span>{{ ic }}</span>{{ nm }}</a>{% endfor %}{% endfor %}
 <div class="out"><a class="nl" href="/logout"><span>🚪</span>Logout</a></div></aside>
@@ -267,6 +268,12 @@ PROFILE = """{% extends 'base.html' %}{% block body %}{% set u = d.u %}
 <div class="card"><h3>Order history ({{ d.hacks }})</h3><div class="tw"><table><tr><th>Date</th><th>Order</th><th>Product</th><th>Plan</th><th>Price</th><th>Key</th></tr>{% for o in d.orders %}<tr><td>{{ o.created|dts }}</td><td><code>{{ o.order_no }}</code></td><td>{{ o.product }}</td><td>{{ o.plan }}</td><td>{{ u.symbol }}{{ '%.2f'|format(o.price) }}</td><td><code>{{ o.key }}</code></td></tr>{% endfor %}{% if not d.orders %}<tr><td colspan="6" class="mu">No orders.</td></tr>{% endif %}</table></div></div>
 <div class="card"><h3>Deposit history</h3><div class="tw"><table><tr><th>Date</th><th>Amount</th><th>Status</th><th>Transaction / UTR</th></tr>{% for x in d.deposits %}<tr><td>{{ x.created|dts }}</td><td>{{ u.symbol }}{{ '%.2f'|format(x.amount) }}</td><td><span class="bd {{ 'ok' if x.status=='paid' else 'no' if x.status in ('rejected','cancelled') else '' }}">{{ x.status }}</span></td><td><code>{{ x.utr or '-' }}</code></td></tr>{% endfor %}{% if not d.deposits %}<tr><td colspan="4" class="mu">No deposits.</td></tr>{% endif %}</table></div></div>
 {% if d.refs %}<div class="card"><h3>People referred ({{ d.nrefs }})</h3><div class="tw"><table><tr><th>ID</th><th>Name</th><th>Joined</th></tr>{% for r in d.refs %}<tr><td><a class="lk" href="/users/{{ r.id }}"><code>{{ r.id }}</code></a></td><td>{{ r.name }}{% if r.username %} <span class="mu">@{{ r.username }}</span>{% endif %}</td><td>{{ r.joined|dts }}</td></tr>{% endfor %}</table></div></div>{% endif %}
+<div class="card" id="rgapi"><h3>🔑 RGAPI System (reseller API)</h3>
+<p class="mu">Status: <b class="{{ 'ok' if u.api_on else 'no' }}">{{ 'ON' if u.api_on else 'OFF' }}</b>{% if u.api_on %} &middot; API orders: <b>{{ u.api_cnt or 0 }}</b> &middot; last used: {{ u.api_last|dts if u.api_last else 'never' }}{% if u.api_ip %} ({{ u.api_ip }}){% endif %}{% endif %}</p>
+{% if u.api_on %}<label>Server URL</label><input readonly value="{{ public_url() }}" onclick="this.select()"><label>API token</label><input readonly value="{{ u.api_token }}" onclick="this.select()">
+<p class="mu">He sees a <b>RGAPI System</b> button in My Profile (above Back) with his token, product / plan IDs and the API docs.</p>{% endif %}
+<form method="post" action="/users/{{ u.id }}" class="row"><input type="hidden" name="csrf" value="{{ csrf() }}">
+{% if u.api_on %}<button name="a" value="rgapi_off" class="red">Turn OFF</button><button name="a" value="rgapi_regen" onclick="return confirm('New token? The old one stops working at once.')">New token</button>{% else %}<button name="a" value="rgapi_on">Turn ON RGAPI</button>{% endif %}</form></div>
 <div class="card" id="custom"><h3>🎯 Product Customize</h3>
 <p class="mu">Set a special price for THIS {{ u.role }} only. Leave a box empty = normal price. Prices are in ₹ (base currency); the bot converts to his currency automatically. {% if ncust %}<b>{{ ncust }} custom price(s) active.</b>{% endif %}</p>
 <details {{ 'open' if ncust else '' }}><summary style="cursor:pointer;font-weight:700;margin-bottom:10px">Show all products &amp; plans ({{ prods|length }})</summary>
@@ -512,7 +519,22 @@ BANNED_PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="vi
 @keyframes p{0%,100%{background:#7f0d0d}50%{background:#c81e1e}}.c{padding:28px;max-width:380px}h1{font-size:30px;margin:10px 0}.i{font-size:64px}</style></head>
 <body><div class="c"><div class="i">🚨</div><h1>ACCESS BLOCKED</h1><p>This device has been <b>banned</b>.<br>The owner denied this login attempt.</p></div></body></html>"""
 
-app.jinja_loader = DictLoader({"categories.html": CATS, "botcfg.html": BOTCFG, "panel.html": PANEL, "panelprod.html": PANELPROD, "find.html": FIND, "newproduct.html": NEWPRODUCT, "payments.html": PAYMENTS, "coupons.html": COUPONS, "backup.html": BACKUP, "broadcast.html": BROADCAST,"products.html": PRODUCTS, "assign.html": ASSIGN, "product.html": PRODUCT, "plan.html": PLAN, "deposits.html": DEPOSITS, "orders.html": ORDERS,"base.html": BASE, "login.html": LOGIN, "home.html": HOME, "emojis.html": EMOJIS, "settings.html": SETTINGS, "users.html": USERS, "profile.html": PROFILE})
+RGAPIADM = """{% extends 'base.html' %}{% block body %}<div class="ph"><h1>🔑 RGAPI</h1><span class="mu">{{ on|length }} active</span></div>
+<div class="card"><h3>Give a user / reseller API access</h3>
+<p class="mu">Search by Telegram (chat) ID, name, @username or phone number, then press <b>Turn ON</b>. He gets an <b>RGAPI System</b> button in My Profile (above Back). His bot connects with: <b>Server URL</b> <code>{{ public_url() }}</code> + his <b>API token</b>.</p>
+<form class="row" method="get"><input name="q" value="{{ q }}" placeholder="Chat ID / name / phone / @username" autofocus><button style="margin:0">Search</button></form>
+{% if q %}<div class="tw"><table><tr><th>ID</th><th>Name</th><th>Phone</th><th>Account</th><th>RGAPI</th><th></th></tr>
+{% for u in found %}<tr><td><a class="lk" href="/users/{{ u.id }}"><code>{{ u.id }}</code></a></td><td><b>{{ u.name }}</b>{% if u.username %}<br><span class="mu">@{{ u.username }}</span>{% endif %}</td><td>{{ u.phone or '-' }}</td><td>{{ u.role }}</td>
+<td><span class="bd {{ 'ok' if u.api_on else 'no' }}">{{ 'ON' if u.api_on else 'OFF' }}</span></td>
+<td><form method="post" action="/users/{{ u.id }}" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf() }}">{% if u.api_on %}<button name="a" value="rgapi_off" class="red" style="margin:0">Turn OFF</button>{% else %}<button name="a" value="rgapi_on" style="margin:0">Turn ON</button>{% endif %}</form></td></tr>{% endfor %}
+{% if not found %}<tr><td colspan="6" class="mu">Nobody found.</td></tr>{% endif %}</table></div>{% endif %}</div>
+<div class="card"><h3>Users with RGAPI ON</h3><div class="tw"><table><tr><th>ID</th><th>Name</th><th>Account</th><th>Balance</th><th>API orders</th><th>API spent</th><th>Last used</th><th></th></tr>
+{% for u in on %}<tr><td><a class="lk" href="/users/{{ u.id }}#rgapi"><code>{{ u.id }}</code></a></td><td><b>{{ u.name }}</b>{% if u.username %}<br><span class="mu">@{{ u.username }}</span>{% endif %}</td><td>{{ u.role }}</td><td>{{ u.symbol }}{{ '%.2f'|format(u.balance) }}</td><td>{{ u.api_orders }}</td><td>{{ u.symbol }}{{ '%.2f'|format(u.api_spent) }}</td>
+<td>{{ u.api_last|dts if u.api_last else 'never' }}{% if u.api_ip %}<br><span class="mu">{{ u.api_ip }}</span>{% endif %}</td>
+<td><form method="post" action="/users/{{ u.id }}" style="margin:0"><input type="hidden" name="csrf" value="{{ csrf() }}"><button name="a" value="rgapi_off" class="red" style="margin:0">Turn OFF</button></form></td></tr>{% endfor %}
+{% if not on %}<tr><td colspan="8" class="mu">Nobody yet. Search a user above and turn RGAPI ON.</td></tr>{% endif %}</table></div></div>{% endblock %}"""
+
+app.jinja_loader = DictLoader({"rgapiadm.html": RGAPIADM, "categories.html": CATS, "botcfg.html": BOTCFG, "panel.html": PANEL, "panelprod.html": PANELPROD, "find.html": FIND, "newproduct.html": NEWPRODUCT, "payments.html": PAYMENTS, "coupons.html": COUPONS, "backup.html": BACKUP, "broadcast.html": BROADCAST,"products.html": PRODUCTS, "assign.html": ASSIGN, "product.html": PRODUCT, "plan.html": PLAN, "deposits.html": DEPOSITS, "orders.html": ORDERS,"base.html": BASE, "login.html": LOGIN, "home.html": HOME, "emojis.html": EMOJIS, "settings.html": SETTINGS, "users.html": USERS, "profile.html": PROFILE})
 
 
 def csrf():
@@ -526,7 +548,7 @@ def public_url():
     return (bot.PUBLIC_URL or request.host_url.rstrip("/"))
 
 
-app.jinja_env.globals.update(csrf=csrf, gs=lambda k: db.get(k), plink=bot.product_link, cats=lambda: db.cats(False), gw_on=gateway.configured,
+app.jinja_env.globals.update(public_url=public_url, csrf=csrf, gs=lambda k: db.get(k), plink=bot.product_link, cats=lambda: db.cats(False), gw_on=gateway.configured,
                              webhook_url=lambda: public_url() + "/webhook/gateway")
 app.jinja_env.filters["dts"] = lambda t: datetime.fromtimestamp(t or 0, IST).strftime("%d %b %Y %H:%M") if t else "-"
 app.jinja_env.filters["ts"] = lambda t: datetime.fromtimestamp(t or 0, IST).strftime("%d %b %H:%M")
@@ -542,7 +564,7 @@ def dev_id():
 
 @app.before_request
 def guard():
-    if request.endpoint in ("health", "static", "pay_page", "pay_status", "gw_webhook"):
+    if request.endpoint in ("health", "static", "pay_page", "pay_status", "gw_webhook") or request.blueprint == "rgapi":
         return
     dev = dev_id()
     # Telegram-verified admins (tg_login / tg_auth) are never blocked by a ban made against somebody else
@@ -905,6 +927,17 @@ def user_action(uid):
             vals = {int(k[3:]): v for k, v in request.form.items() if k.startswith("cp_") and k[3:].isdigit()}
             s, cl, bad = db.save_user_prices(uid, vals)
             flash(f"✅ Saved {s} custom price(s)" + (f", {cl} reset to normal" if cl else "") + (f", {bad} invalid ignored (use a number above 0)" if bad else ""))
+    if a in ("rgapi_on", "rgapi_off", "rgapi_regen"):            # V20: RGAPI switch on a user's profile / the RGAPI page
+        if a == "rgapi_on":
+            if rgapi.enable(uid):
+                flash("✅ RGAPI is ON for this user. He now sees the RGAPI System button in My Profile.")
+                bot.safe(bot.send, uid, "🔑 <b>RGAPI System activated!</b>\nOpen <b>My Profile</b> → <b>RGAPI System</b> to get your API token, product IDs and connection guide.")
+        elif a == "rgapi_off":
+            rgapi.disable(uid)
+            flash("RGAPI turned OFF - his token stops working at once.")
+        else:
+            rgapi.regen(uid)
+            flash("✅ New API token created. The old token no longer works.")
     if a == "msg":
         txt = request.form.get("text", "").strip()
         r = bot.send(uid, bot.esc(txt)) if txt else {"ok": False}
@@ -1557,6 +1590,13 @@ def panel_products():
 
 
 @app.route("/panel/add", methods=["POST"])
+@app.route("/rgapi-admin")
+def rgapi_admin():
+    q = request.args.get("q", "").strip()
+    found = db.search_users(q, "all", "new", 15, 0)[0] if q else []
+    return page("rgapiadm", q=q, found=found, on=rgapi.enabled_users(), tab="rgapi", title="RGAPI")
+
+
 def panel_add():
     f = request.form
     ids, plist = None, None

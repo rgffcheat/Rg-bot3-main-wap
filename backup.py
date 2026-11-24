@@ -86,6 +86,8 @@ def restore_bytes(data, gz=False):
             if os.path.exists(db.DB_PATH + ext):
                 os.remove(db.DB_PATH + ext)
         os.replace(tmp, db.DB_PATH)
+        db._gc.clear()
+        db.emoji_clear()
         return True
     except Exception:
         traceback.print_exc()

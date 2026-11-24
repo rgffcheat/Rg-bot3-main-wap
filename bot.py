@@ -14,6 +14,11 @@ TOKEN = os.getenv("BOT_TOKEN", "")          # can be replaced any time from the 
 ADMIN_ID = int(os.getenv("ADMIN_ID", "6739795427") or 0)
 API = f"https://api.telegram.org/bot{TOKEN}/"
 S = requests.Session()
+# V21: big connection pool (default is only 10 -> with many users connections were thrown away / rebuilt = slow)
+from requests.adapters import HTTPAdapter
+_ad = HTTPAdapter(pool_connections=50, pool_maxsize=200, max_retries=0, pool_block=False)
+S.mount("https://", _ad)
+S.mount("http://", _ad)
 IST = timezone(timedelta(hours=5, minutes=30))
 BOT_USERNAME = {"v": ""}
 PUBLIC_URL = (os.getenv("PUBLIC_URL") or os.getenv("RENDER_EXTERNAL_URL") or "").rstrip("/")
@@ -463,7 +468,14 @@ def profile_screen(u):
         f"└── {E('calendar')} Joined: {ist(u['joined'], '%Y-%m-%d')} IST\n\n"
         f"{E('user')} {role}"
     )
-    return text, KB([back_btn()])
+    rows = []
+    try:
+        if u["api_on"] and PUBLIC_URL.startswith("https://"):          # V20: RGAPI System button (only when the owner switched it ON)
+            rows.append([{"text": "🔑 RGAPI System", "web_app": {"url": PUBLIC_URL + "/rgapi/login"}, "style": "primary"}])
+    except (KeyError, IndexError):
+        pass
+    rows.append([back_btn()])
+    return text, KB(*rows)
 
 
 def ref_screen(u):
@@ -1433,35 +1445,54 @@ def expired_text(pay, minutes):
             f"Tap /start to begin a new order.")
 
 
+_pw_pool = ThreadPoolExecutor(max_workers=8)
+
+
+def _pay_one(p, minutes, exp):
+    try:
+        if time.time() - p["created"] > exp:
+            # one last check, then expire (a late payment is still honoured by webhook / admin)
+            if gateway.configured():
+                st0, tx0, _a = gateway.check(p["pay_no"])
+                if st0 == "paid":
+                    complete_pay(p["pay_no"], tx0)
+                    return
+            db.pay_update(p["pay_no"], status="expired")
+            _polled.pop(p["pay_no"], None)
+            if p["chat_id"]:
+                if p["msg_id"]:
+                    api("deleteMessage", chat_id=p["chat_id"], message_id=p["msg_id"])
+                send(p["chat_id"], expired_text(p, minutes))
+            return
+        if gateway.configured() and time.time() - _polled.get(p["pay_no"], 0) >= 6:
+            _polled[p["pay_no"]] = time.time()
+            st, txn, _a = gateway.check(p["pay_no"])
+            if st == "paid":
+                complete_pay(p["pay_no"], txn)
+            elif st == "failed":
+                db.pay_update(p["pay_no"], status="cancelled")
+    except Exception:
+        traceback.print_exc()
+    finally:
+        _pw_busy.discard(p["pay_no"])
+
+
+_pw_busy = set()
+
+
 def pay_watch():
-    """background: check pending QR payments, and send 'PAYMENT EXPIRED' when the time is over"""
+    """background: check pending QR payments (in parallel, one slow gateway call no longer blocks the others),
+    and send 'PAYMENT EXPIRED' when the time is over"""
     while True:
         time.sleep(3)
         try:
             minutes = int(db.get("pay_expire", "5") or 5)
             exp = minutes * 60
-            for p in db.pay_pending()[:8]:
-                if time.time() - p["created"] > exp:
-                    # one last check, then expire (a late payment is still honoured by webhook / admin)
-                    if gateway.configured():
-                        st0, tx0, _a = gateway.check(p["pay_no"])
-                        if st0 == "paid":
-                            complete_pay(p["pay_no"], tx0)
-                            continue
-                    db.pay_update(p["pay_no"], status="expired")
-                    _polled.pop(p["pay_no"], None)
-                    if p["chat_id"]:
-                        if p["msg_id"]:
-                            api("deleteMessage", chat_id=p["chat_id"], message_id=p["msg_id"])
-                        send(p["chat_id"], expired_text(p, minutes))
+            for p in db.pay_pending()[:30]:
+                if p["pay_no"] in _pw_busy:
                     continue
-                if gateway.configured() and time.time() - _polled.get(p["pay_no"], 0) >= 6:
-                    _polled[p["pay_no"]] = time.time()
-                    st, txn, _a = gateway.check(p["pay_no"])
-                    if st == "paid":
-                        complete_pay(p["pay_no"], txn)
-                    elif st == "failed":
-                        db.pay_update(p["pay_no"], status="cancelled")
+                _pw_busy.add(p["pay_no"])
+                _pw_pool.submit(_pay_one, p, minutes, exp)
         except Exception:
             traceback.print_exc()
 
@@ -2527,7 +2558,7 @@ def start_polling():
 
 
 def poll_loop(gen):
-    pool = ThreadPoolExecutor(max_workers=16)
+    pool = ThreadPoolExecutor(max_workers=64)
     offset = 0
     announced = False
     while gen == _gen["n"]:

@@ -209,15 +209,35 @@ COUNTRIES = [
 DIRTY = {"v": False}
 
 
-@contextmanager
-def conn():
+def _open():
     c = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     c.row_factory = sqlite3.Row
+    # speed: WAL + NORMAL sync = no slow fsync on every commit (safe in WAL mode), readers never block writers
+    try:
+        c.execute("PRAGMA busy_timeout=30000")
+        c.execute("PRAGMA synchronous=NORMAL")
+        c.execute("PRAGMA temp_store=MEMORY")
+        c.execute("PRAGMA cache_size=-16000")
+        c.execute("PRAGMA mmap_size=134217728")
+    except Exception:
+        pass
+    return c
+
+
+@contextmanager
+def conn():
+    c = _open()
     try:
         yield c
         c.commit()
         if c.total_changes:
             DIRTY["v"] = True
+    except BaseException:
+        try:
+            c.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         c.close()
 
@@ -263,6 +283,9 @@ def init():
         CREATE TABLE IF NOT EXISTS refund_reqs(
             id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, plan_id INTEGER, price REAL DEFAULT 0, hold REAL DEFAULT 0,
             status TEXT DEFAULT 'pending', created INTEGER, decided INTEGER DEFAULT 0);
+        CREATE TABLE IF NOT EXISTS api_orders(
+            id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, ref TEXT, order_no TEXT DEFAULT '',
+            state TEXT DEFAULT 'working', created INTEGER, UNIQUE(user_id, ref));
         CREATE INDEX IF NOT EXISTS ix_pay_status ON pay_orders(status, created);
         CREATE INDEX IF NOT EXISTS ix_keys_plan ON keys(plan_id, used);
         CREATE INDEX IF NOT EXISTS ix_orders_user ON orders(user_id);
@@ -279,7 +302,14 @@ def init():
                     "ALTER TABLE plans ADD COLUMN base_price REAL DEFAULT 0",
                     "ALTER TABLE plans ADD COLUMN manual INTEGER DEFAULT 0",
                     "ALTER TABLE deposits ADD COLUMN utr TEXT DEFAULT ''",
-                    "ALTER TABLE deposits ADD COLUMN proof TEXT DEFAULT ''"):
+                    "ALTER TABLE deposits ADD COLUMN proof TEXT DEFAULT ''",
+                    # V20 - RGAPI (reseller API)
+                    "ALTER TABLE users ADD COLUMN api_on INTEGER DEFAULT 0",
+                    "ALTER TABLE users ADD COLUMN api_token TEXT DEFAULT ''",
+                    "ALTER TABLE users ADD COLUMN api_last INTEGER DEFAULT 0",
+                    "ALTER TABLE users ADD COLUMN api_ip TEXT DEFAULT ''",
+                    "ALTER TABLE users ADD COLUMN api_cnt INTEGER DEFAULT 0",
+                    "ALTER TABLE orders ADD COLUMN src TEXT DEFAULT ''"):
             try:
                 c.execute(ddl)
             except sqlite3.OperationalError:
@@ -293,10 +323,29 @@ def init():
 
 
 # ---------- settings ----------
-def get(k, default=""):
+_gc = {}
+_GC_TTL = 3
+
+
+def _get_db(k, default=""):
     with conn() as c:
         r = c.execute("SELECT v FROM settings WHERE k=?", (k,)).fetchone()
     return r["v"] if r else default
+
+
+def get(k, default=""):
+    """settings value. Cached for 3 seconds: this is read many times for EVERY message / button,
+    reading the disk each time made the bot slow when several people used it together."""
+    hit = _gc.get(k)
+    now = time.time()
+    if hit and now - hit[0] < _GC_TTL:
+        return hit[1] if hit[2] else default
+    with conn() as c:
+        r = c.execute("SELECT v FROM settings WHERE k=?", (k,)).fetchone()
+    found = bool(r)
+    v = r["v"] if r else ""
+    _gc[k] = (now, v, found)
+    return v if found else default
 
 
 def put(k, v):
@@ -305,17 +354,9 @@ def put(k, v):
     _gc.clear()
 
 
-_gc = {}
-
-
 def get_c(k, default="", ttl=4):
-    """settings value with a tiny cache (used for things read on every button)"""
-    hit = _gc.get(k)
-    if hit and time.time() - hit[0] < ttl:
-        return hit[1]
-    v = get(k, default)
-    _gc[k] = (time.time(), v)
-    return v
+    """kept for old callers - get() is cached now"""
+    return get(k, default)
 
 
 # ---------- emojis ----------

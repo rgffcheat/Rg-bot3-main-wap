@@ -234,3 +234,43 @@ V19 - PRODUCT DIRECT LINKS
 * Website -> Products: "Link" column with a Copy button for each product, and "Copy ALL links"
   (copies "Name - link" for every product shown). Open a product to see its link on top.
 * The link needs the bot username: it is loaded automatically when the bot starts (Bot Token saved).
+
+
+=====================================================================
+V20 - RGAPI (RESELLER API)  -  your resellers connect THEIR bot / website to YOUR shop
+=====================================================================
+Files changed: db.py, bot.py, web.py, main.py.  NEW file: rgapi.py.  Replace ALL files and redeploy. Old data is kept (new columns/tables are created by themselves).
+REQUIRED: env PUBLIC_URL must be an https:// address (same as the admin website button).
+
+1) TURN IT ON (Website -> RGAPI, or the "RGAPI System" card on a user's profile)
+   Search by chat ID / name / phone / @username -> [Turn ON]. A token is created. The user gets a message and a new button
+   "RGAPI System" in My Profile (above Back). Turn OFF = his token stops working at once. [New token] replaces the token.
+   Works for resellers AND normal users. Prices: his custom price (Product Customize) > reseller price > user price.
+2) WHAT HE SEES (button opens a website inside Telegram, signs in by itself, no password)
+   Connect tab: Server URL + API token (copy / show / regenerate) + 5-step guide.
+   Products tab: every product with Product ID, every plan with Plan ID and HIS price, search box, in-stock tag.
+   API Docs tab: all endpoints, copy-ready code (cURL, Python, PHP, Node.js), error codes.   Orders tab: his API orders with keys.
+3) CONNECT IN ONE STEP (reseller who runs an RG bot)
+   His bot already has Website -> Panel API: paste Server URL + API token -> Save & Connect ("Connect successful") -> Check Balance ->
+   Show Products -> tick products / "Add all" -> set Reseller % / User % -> Save & apply. His price = your price + his %.
+   Prices re-sync automatically (his auto price sync). Nothing else to do.
+4) API (header  X-API-Key: <token>)
+   GET /api/v1/connect | /api/v1/balance | /api/v1/products(?ids=1,2) | /api/v1/orders | /api/v1/order/<order_id>
+   POST /api/v1/purchase  {"plan_id": N, "reference": "unique-id"}  ->  {"success": true, "key": "..."}
+5) SAFETY
+   - Money comes from his bot wallet. Refunded money that is still locked (refund hold) cannot be spent by API.
+   - Same "reference" can never buy twice (a timeout can be retried safely).
+   - Product from your main panel fails clearly -> nothing charged (503). Panel does not answer -> NO auto refund, he gets
+     "do not buy again" (500) and YOU get the alert (same rule as V10).
+   - Rate limit: 180 requests/min, 60 purchases/min per token.  Banned user = API blocked.
+   - You get the normal "NEW HACK PURCHASE" alert for every API order (payment method: RGAPI). Referral commission is not paid on API orders.
+   - Web server now runs 16 threads (was 8) so slow API purchases never block the admin site.
+
+
+================ V21 - SPEED FIX (many users at the same time) ================
+Files changed: db.py, bot.py, backup.py.   Replace these 3 files (or the whole repo) and redeploy. Data and env variables unchanged.
+- Settings are cached for 3 seconds (before: every message / button read the disk 40+ times).
+- SQLite: synchronous=NORMAL + busy_timeout + bigger cache (no slow disk sync on every save).
+- Telegram connection pool 10 -> 200 (before, with many users connections were dropped and rebuilt = slow).
+- Worker threads 16 -> 64, so a few slow actions (panel buy, gateway) can not block the other users.
+- Payment checking runs in parallel (one slow gateway call no longer delays the others).
