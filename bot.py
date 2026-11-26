@@ -36,23 +36,65 @@ def _strip(markup):
     return markup
 
 
+# V22: background pool for "fire and forget" Telegram calls (answer button, delete old messages ...)
+_bg_pool = ThreadPoolExecutor(max_workers=32)
+
+
+def bg(fn, *a, **k):
+    """run fn in the background - the user's screen does not wait for it"""
+    def _run():
+        try:
+            fn(*a, **k)
+        except Exception:
+            traceback.print_exc()
+    try:
+        _bg_pool.submit(_run)
+    except Exception:
+        _run()
+
+
+def _post(method, p):
+    """one Telegram call with smart retry (V22):
+    - connection dropped / reset BEFORE Telegram answered -> retry at once (was: the action silently failed)
+    - 429 Too Many Requests -> wait the time Telegram asks (max 5s) and retry
+    - 5xx from Telegram -> one quick retry"""
+    last = None
+    for attempt in range(3):
+        try:
+            r = S.post(API + method, data=p, timeout=(10, 60)).json()
+        except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
+            last = {"ok": False, "description": str(e)}
+            if isinstance(e, requests.exceptions.ReadTimeout):
+                return last
+            time.sleep(0.15 * (attempt + 1))
+            continue
+        except Exception as e:
+            return {"ok": False, "description": str(e)}
+        if not r.get("ok"):
+            code = r.get("error_code") or 0
+            if code == 429 and attempt < 2:
+                wait = (r.get("parameters") or {}).get("retry_after", 1)
+                if wait <= 5:
+                    time.sleep(wait + 0.1)
+                    continue
+            if code >= 500 and attempt < 1:
+                time.sleep(0.3)
+                continue
+        return r
+    return last or {"ok": False, "description": "network error"}
+
+
 def api(method, **p):
     if "reply_markup" in p and p["reply_markup"] is not None and not isinstance(p["reply_markup"], str):
         p["reply_markup"] = json.dumps(p["reply_markup"])
     p = {k: v for k, v in p.items() if v is not None}
-    try:
-        r = S.post(API + method, data=p, timeout=60).json()
-    except Exception as e:
-        return {"ok": False, "description": str(e)}
+    r = _post(method, p)
     if not r.get("ok") and "reply_markup" in p and "not modified" not in r.get("description", ""):
         d = r.get("description", "").lower()
         if any(x in d for x in ("emoji", "style", "button", "unsupported", "field")):
             m = _strip(json.loads(p["reply_markup"]))
             p["reply_markup"] = json.dumps(m)
-            try:
-                r = S.post(API + method, data=p, timeout=60).json()
-            except Exception as e:
-                return {"ok": False, "description": str(e)}
+            r = _post(method, p)
     return r
 
 
@@ -138,7 +180,7 @@ def send(chat, text, kb=None):
 
 def show(chat, mid, text, kb=None, photo=False):
     if photo:
-        api("deleteMessage", chat_id=chat, message_id=mid)
+        bg(api, "deleteMessage", chat_id=chat, message_id=mid)     # V22: new screen does not wait for the delete
         send(chat, text, kb)
         return
     r = api("editMessageText", chat_id=chat, message_id=mid, text=text, parse_mode="HTML", reply_markup=kb,
@@ -178,7 +220,16 @@ def fetch_file(file_id):
 
 
 def ans(cq, text=None, alert=False):
-    api("answerCallbackQuery", callback_query_id=cq["id"], text=text, show_alert="true" if alert else None)
+    """answer a button tap. V22: only the FIRST answer counts (Telegram ignores the rest anyway),
+    and it is sent in the background so the screen change never waits for it."""
+    with _ans_lock:
+        if cq.get("_answered"):
+            return
+        cq["_answered"] = True
+    bg(api, "answerCallbackQuery", callback_query_id=cq["id"], text=text, show_alert="true" if alert else None)
+
+
+_ans_lock = threading.Lock()
 
 
 # ------------------------------------------------------------------ UI helpers
@@ -383,7 +434,7 @@ def open_product(chat, u, pid, start_mid=None):
     t, k = prod_screen(u, pid)
     r = send(chat, t, k)
     if start_mid and _msg_id(r):
-        api("deleteMessage", chat_id=chat, message_id=start_mid)
+        bg(api, "deleteMessage", chat_id=chat, message_id=start_mid)
 
 
 def start_flow(chat, u, start_mid=None):
@@ -391,11 +442,11 @@ def start_flow(chat, u, start_mid=None):
     and as soon as the menu is on screen the Welcome message AND the user's own /start message are deleted."""
     wid = _msg_id(send(chat, f"<b>Welcome</b>{E('party')}"))
     r = send_menu(chat, u)
-    if _msg_id(r):                                   # menu is visible -> clean up
+    if _msg_id(r):                                   # menu is visible -> clean up (in the background, V22)
         if wid:
-            api("deleteMessage", chat_id=chat, message_id=wid)
+            bg(api, "deleteMessage", chat_id=chat, message_id=wid)
         if start_mid:
-            api("deleteMessage", chat_id=chat, message_id=start_mid)
+            bg(api, "deleteMessage", chat_id=chat, message_id=start_mid)
 
 
 def addbal_screen(u):
@@ -586,7 +637,7 @@ def shop_screen(u, cid=None):
     rows = []
     prods = db.products(True, cid)
     for p in prods:
-        tag = "" if p["stock"] else " · Sold out"
+        tag = "" if p["stock"] else " · Out of Stock"
         rows.append([B(p["name"] + tag, cb=f"p:{p['id']}", style="primary", ek="cart", eid=db.product_eid(p))])
     text += (f"{E('shield')} <b>Pick what you want</b> {E('tap')}\nTap any product to see options." if prods
              else "<i>No products available yet.</i>")
@@ -609,11 +660,11 @@ def prod_screen(u, pid):
     for n, pl in enumerate(plans):
         price = db.price_for(u, pl)
         br = "└──" if n == len(plans) - 1 else "├──"
-        text += f"{br} {EX(pe, 'time')} {esc(pl['name'])} ➝ {E('money')} {rs(price)}{'' if pl['stock'] > 0 else ' (Sold out)'}\n"
+        text += f"{br} {EX(pe, 'time')} {esc(pl['name'])} ➝ {E('money')} {rs(price)}{'' if pl['stock'] > 0 else ' ❌ (Out of Stock)'}\n"
         if pl["stock"] > 0:
             rows.append([B(f"Buy {pl['name']} · {rs(price)}", cb=f"pl:{pl['id']}", style="success", ek="key", eid=pe)])
         else:
-            rows.append([B(f"{pl['name']} · Sold out", cb="oos")])
+            rows.append([B(f"{pl['name']} · Out of Stock", cb="oos", style="danger")])
     if plans:
         text += f"\n{E('tap')} <b>CHOOSE A PLAN</b> {E('tap')}"
     else:
@@ -690,7 +741,7 @@ def plan_screen(u, plid):
              f"{E('wallet')} Wallet Balance: <b>{fmt(u, u['balance'])}</b>\n\n")
     rows = []
     if pl["stock"] <= 0:
-        text += "<i>This plan is sold out.</i>"
+        text += "<i>❌ This plan is Out of Stock right now.</i>"
     else:
         text += (f"{E('tap')} <b>Pick how you want to pay:</b>\n"
                  f"Pick any option below. If you have wallet balance, you can pay instantly.")
@@ -1531,7 +1582,7 @@ def notify_admin_deposit(d, u, utr, proof):
 _last = {}
 
 
-def rate_ok(uid, gap=0.35):
+def rate_ok(uid, gap=0.2):
     """ignore button taps faster than ~3 per second per user"""
     now = time.time()
     if now - _last.get(uid, 0) < gap:
@@ -2106,6 +2157,9 @@ def on_message(m):
     send_menu(chat, u)
 
 
+_NAV = {"menu", "shop", "profile", "ref", "tut", "sup", "hist", "addbal"}
+
+
 def on_cb(cq):
     uid = cq["from"]["id"]
     chat, mid = cq["message"]["chat"]["id"], cq["message"]["message_id"]
@@ -2225,6 +2279,10 @@ def on_cb(cq):
     def sh(t, k):
         show(chat, mid, t, k, photo)
 
+    # V22: plain screen changes -> stop the button's loading clock at once (screen is edited right after)
+    if data in _NAV or data.startswith(("cat:", "p:", "pl:")):
+        ans(cq)
+
     if data == "menu":
         db.kp_set(uid, "")
         db.st_set(uid, "")
@@ -2252,7 +2310,7 @@ def on_cb(cq):
             ans(cq, "This item is no longer available.", True)
             return
         if pl["stock"] <= 0:
-            ans(cq, "This plan is sold out.", True)
+            ans(cq, "❌ This plan is Out of Stock right now.", True)
             return
         final, disc, err = db.coupon_calc(u, pl, db.cp_get(uid, plid))
         if err:
@@ -2279,7 +2337,7 @@ def on_cb(cq):
             ans(cq, "This item is no longer available.", True)
             return
         if pl["stock"] <= 0:
-            ans(cq, "This plan is sold out.", True)
+            ans(cq, "❌ This plan is Out of Stock right now.", True)
             return
         method = "binance" if data[:3] == "pb:" else ("upi" if u["currency"] == "INR" else "other")
         e = method_err(u, method)
@@ -2342,7 +2400,7 @@ def on_cb(cq):
         sh(*menu_screen(u))
         return
     elif data == "oos":
-        ans(cq, "This plan is sold out.", True)
+        ans(cq, "❌ This plan is Out of Stock right now.", True)
         return
     elif data.startswith("buy:"):
         plid_b = int(data[4:])
@@ -2380,7 +2438,7 @@ def on_cb(cq):
             return
         elif res[0] == "stock":
             safe(notify_wallet_fail, u, plid_b, "Out of stock - the key could not be issued.")
-            ans(cq, "Sorry, this plan just sold out.", True)
+            ans(cq, "❌ Sorry, this plan is Out of Stock now.", True)
             return
         else:
             ans(cq, "This item is no longer available.", True)
@@ -2468,9 +2526,23 @@ def process(u):
     try:
         src = u.get("message") or u.get("callback_query") or {}
         uid = (src.get("from") or {}).get("id", 0)
+        cq = u.get("callback_query")
+        tm = None
+        if cq:
+            # V22: if the action takes longer than 0.6s (or the user is waiting behind his previous tap),
+            # the button's loading clock is stopped anyway, so Telegram never looks frozen
+            tm = threading.Timer(0.6, ans, args=(cq,))
+            tm.daemon = True
+            tm.start()
         lock = _locks.setdefault(uid, threading.Lock())
-        with lock:
-            _dispatch(u)
+        try:
+            with lock:
+                _dispatch(u)
+        finally:
+            if tm:
+                tm.cancel()
+            if cq:
+                ans(cq)
     except Exception:
         traceback.print_exc()
 

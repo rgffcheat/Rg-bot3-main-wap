@@ -309,11 +309,32 @@ def init():
                     "ALTER TABLE users ADD COLUMN api_last INTEGER DEFAULT 0",
                     "ALTER TABLE users ADD COLUMN api_ip TEXT DEFAULT ''",
                     "ALTER TABLE users ADD COLUMN api_cnt INTEGER DEFAULT 0",
-                    "ALTER TABLE orders ADD COLUMN src TEXT DEFAULT ''"):
+                    "ALTER TABLE orders ADD COLUMN src TEXT DEFAULT ''",
+                    # V22 - manual OUT OF STOCK switch per plan (works for panel/API plans too)
+                    "ALTER TABLE plans ADD COLUMN oos INTEGER DEFAULT 0"):
             try:
                 c.execute(ddl)
             except sqlite3.OperationalError:
                 pass
+        # V22 speed: indexes for the lookups done on every tap (profile, history, referral, payments ...)
+        for ix in ("CREATE INDEX IF NOT EXISTS ix_dep_user ON deposits(user_id, status)",
+                   "CREATE INDEX IF NOT EXISTS ix_pay_user ON pay_orders(user_id)",
+                   "CREATE INDEX IF NOT EXISTS ix_pay_txn ON pay_orders(txn)",
+                   "CREATE INDEX IF NOT EXISTS ix_users_ref ON users(ref_by)",
+                   "CREATE INDEX IF NOT EXISTS ix_users_tok ON users(api_token)",
+                   "CREATE INDEX IF NOT EXISTS ix_cpu ON coupon_uses(code, user_id)",
+                   "CREATE INDEX IF NOT EXISTS ix_orders_no ON orders(order_no)",
+                   "CREATE INDEX IF NOT EXISTS ix_keys_order ON keys(order_no)",
+                   "CREATE INDEX IF NOT EXISTS ix_plans_prod ON plans(product_id, active)",
+                   "CREATE INDEX IF NOT EXISTS ix_plans_api ON plans(api_plan_id)",
+                   "CREATE INDEX IF NOT EXISTS ix_prod_cat ON products(cat_id, active)",
+                   "CREATE INDEX IF NOT EXISTS ix_prod_api ON products(api_pid)",
+                   "CREATE INDEX IF NOT EXISTS ix_rq_user ON refund_reqs(user_id, status)"):
+            try:
+                c.execute(ix)
+            except sqlite3.OperationalError:
+                pass
+        c.execute("PRAGMA optimize")
         for k, v in SETTINGS_DEFAULTS.items():
             c.execute("INSERT OR IGNORE INTO settings(k,v) VALUES(?,?)", (k, v))
         if not (c.execute("SELECT v FROM settings WHERE k='gw_secret'").fetchone()["v"] or "").strip():
@@ -625,8 +646,8 @@ def save_user_prices(uid, values):
 
 def products(active_only=True, cat_id=None):
     q = """SELECT p.*,
-      (SELECT COUNT(*) FROM keys k JOIN plans pl ON pl.id=k.plan_id WHERE pl.product_id=p.id AND k.used=0)
-        + (SELECT COUNT(*) * 999999 FROM plans pl WHERE pl.product_id=p.id AND pl.active=1 AND pl.api_plan_id>0) stock,
+      (SELECT COUNT(*) FROM keys k JOIN plans pl ON pl.id=k.plan_id WHERE pl.product_id=p.id AND k.used=0 AND pl.active=1 AND COALESCE(pl.oos,0)=0)
+        + (SELECT COUNT(*) * 999999 FROM plans pl WHERE pl.product_id=p.id AND pl.active=1 AND pl.api_plan_id>0 AND COALESCE(pl.oos,0)=0) stock,
       (SELECT COUNT(*) FROM plans pl WHERE pl.product_id=p.id) nplans FROM products p"""
     where = []
     if active_only:
@@ -659,7 +680,7 @@ def product(pid):
 
 
 def plans_of(pid, active_only=True):
-    q = """SELECT pl.*, CASE WHEN pl.api_plan_id>0 THEN 999999 ELSE (SELECT COUNT(*) FROM keys k WHERE k.plan_id=pl.id AND k.used=0) END stock,
+    q = """SELECT pl.*, CASE WHEN COALESCE(pl.oos,0)=1 THEN 0 WHEN pl.api_plan_id>0 THEN 999999 ELSE (SELECT COUNT(*) FROM keys k WHERE k.plan_id=pl.id AND k.used=0) END stock,
            (SELECT COUNT(*) FROM keys k WHERE k.plan_id=pl.id AND k.used=1) sold
            FROM plans pl WHERE pl.product_id=?"""
     if active_only:
@@ -671,7 +692,7 @@ def plans_of(pid, active_only=True):
 def plan(plid):
     with conn() as c:
         return c.execute("""SELECT pl.*, p.name pname, p.active pactive,
-            CASE WHEN pl.api_plan_id>0 THEN 999999 ELSE (SELECT COUNT(*) FROM keys k WHERE k.plan_id=pl.id AND k.used=0) END stock
+            CASE WHEN COALESCE(pl.oos,0)=1 THEN 0 WHEN pl.api_plan_id>0 THEN 999999 ELSE (SELECT COUNT(*) FROM keys k WHERE k.plan_id=pl.id AND k.used=0) END stock
             FROM plans pl JOIN products p ON p.id=pl.product_id WHERE pl.id=?""", (plid,)).fetchone()
 
 
@@ -761,7 +782,7 @@ def buy(uid, plan_id, coupon="", ext_price=None):
             price = round(price - d, 2)
         if ext_price is None and u["balance"] < price:
             return ("bal", price)
-        k = c.execute("SELECT id, code FROM keys WHERE plan_id=? AND used=0 ORDER BY id LIMIT 1", (plan_id,)).fetchone()
+        k = None if pl["oos"] else c.execute("SELECT id, code FROM keys WHERE plan_id=? AND used=0 ORDER BY id LIMIT 1", (plan_id,)).fetchone()
         if not k:
             if ext_price is not None:
                 c.execute("UPDATE users SET balance=ROUND(balance+?,2), refund_hold=ROUND(COALESCE(refund_hold,0)+?,2) WHERE id=?", (ext_price, ext_price, uid))
@@ -797,6 +818,11 @@ def api_reserve(uid, plan_id, coupon="", ext_price=None):
                 c.execute("UPDATE users SET balance=ROUND(balance+?,2), refund_hold=ROUND(COALESCE(refund_hold,0)+?,2) WHERE id=?", (ext_price, ext_price, uid))
                 return ("refund", ext_price)
             return ("gone",)
+        if pl["oos"]:                               # V22: admin marked this plan OUT OF STOCK
+            if ext_price:
+                c.execute("UPDATE users SET balance=ROUND(balance+?,2), refund_hold=ROUND(COALESCE(refund_hold,0)+?,2) WHERE id=?", (ext_price, ext_price, uid))
+                return ("refund", ext_price)
+            return ("stock",)
         price = price_for(u, pl)
         if ext_price is not None:
             price = ext_price
@@ -1127,3 +1153,13 @@ def user_profile(uid):
             "nrefs": c.execute("SELECT COUNT(*) FROM users WHERE ref_by=?", (uid,)).fetchone()[0],
             "refby": c.execute("SELECT id,name FROM users WHERE id=?", (u["ref_by"],)).fetchone() if u["ref_by"] else None,
         }
+
+
+def set_oos(plan_ids, on):
+    """V22: mark plans OUT OF STOCK (on=True) or back IN STOCK (on=False)"""
+    ids = [int(x) for x in plan_ids]
+    if not ids:
+        return 0
+    with conn() as c:
+        c.execute(f"UPDATE plans SET oos=? WHERE id IN ({','.join('?' * len(ids))})", [1 if on else 0] + ids)
+        return c.total_changes

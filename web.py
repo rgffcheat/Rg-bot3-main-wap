@@ -353,12 +353,17 @@ PRODUCT = """{% extends 'base.html' %}{% block body %}<h1>{{ p.name }}</h1>
 <label>Visibility</label><select name="active"><option value="1" {{ 'selected' if p.active }}>Visible</option><option value="0" {{ 'selected' if not p.active }}>Hidden</option></select>
 <button>Save</button></form>
 <form method="post" onsubmit="return confirm('Delete this product, its plans and unsold keys?')"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="a" value="del"><button class="red">Delete product</button></form></div>
-<div class="card tw"><h3>Plans (prices in INR)</h3><table><tr><th>Duration</th><th>Panel cost</th><th>User price</th><th>Reseller price</th><th>Show</th><th>Stock / Sold</th><th></th></tr>
-{% for pl in plans %}<tr><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="plan_id" value="{{ pl.id }}">
-<td>{% set pp_ = pl.name|pp %}{% if pp_ %}<input name="dur" value="{{ pp_[0] }}" style="width:70px"> <select name="unit" style="width:90px"><option value="hours" {{ 'selected' if pp_[1]=='hours' }}>Hours</option><option value="days" {{ 'selected' if pp_[1]=='days' }}>Days</option></select>{% else %}<input name="name" value="{{ pl.name }}">{% endif %}</td><td class="mu">{% if pl.api_plan_id %}₹{{ '%.2f'|format(pl.base_price) }}<br>API #{{ pl.api_plan_id }}{% else %}-{% endif %}</td><td><input name="price" value="{{ pl.price }}" style="width:80px"></td><td><input name="rprice" value="{{ pl.rprice }}" style="width:80px"></td>
-<td><select name="active"><option value="1" {{ 'selected' if pl.active }}>Yes</option><option value="0" {{ 'selected' if not pl.active }}>No</option></select></td>
-<td>{% if pl.api_plan_id %}auto / {{ pl.sold }}<br><span class="mu">{{ 'price: manual' if pl.manual else 'price: auto' }}</span>{% else %}{{ pl.stock }} / {{ pl.sold }}<br><a class="lk" href="/plans/{{ pl.id }}">Manage keys</a>{% endif %}</td>
-<td><button name="a" value="saveplan" style="margin:0">Save</button> {% if pl.api_plan_id and pl.manual %}<button name="a" value="autoprice" style="margin:0" title="go back to the automatic % price">Auto</button> {% endif %}<button name="a" value="delplan" class="red" style="margin:0" onclick="return confirm('Delete plan and unsold keys?')">X</button></td></form></tr>{% endfor %}</table></div>
+<div class="card tw"><h3>Plans (prices in INR)</h3>
+<p class="mu">Every plan has its own <b>Stock</b> switch. Choose <b>Out of Stock</b> + Save (or press the red/green button) and the bot shows <b>❌ Out of Stock</b> for that plan and nobody can buy it - also for products connected to the panel API. Choose <b>In stock</b> to sell it again.</p>
+<form method="post" class="row" style="flex-wrap:wrap;gap:6px;margin:0 0 10px"><input type="hidden" name="csrf" value="{{ csrf() }}"><button name="a" value="alloos" class="red" style="margin:0" onclick="return confirm('Mark ALL plans of this product Out of Stock?')">❌ All plans Out of Stock</button><button name="a" value="allin" class="grn" style="margin:0">✅ All plans In stock</button></form>
+<table><tr><th>Duration</th><th>Panel cost</th><th>User price</th><th>Reseller price</th><th>Show</th><th>Stock</th><th>Stock / Sold</th><th></th></tr>
+{% for pl in plans %}{% set fid = 'plf' ~ pl.id %}<tr{% if pl.oos %} style="background:rgba(220,38,38,.08)"{% endif %}>
+<td>{% set pp_ = pl.name|pp %}{% if pp_ %}<input form="{{ fid }}" name="dur" value="{{ pp_[0] }}" style="width:70px"> <select form="{{ fid }}" name="unit" style="width:90px"><option value="hours" {{ 'selected' if pp_[1]=='hours' }}>Hours</option><option value="days" {{ 'selected' if pp_[1]=='days' }}>Days</option></select>{% else %}<input form="{{ fid }}" name="name" value="{{ pl.name }}">{% endif %}</td><td class="mu">{% if pl.api_plan_id %}₹{{ '%.2f'|format(pl.base_price) }}<br>API #{{ pl.api_plan_id }}{% else %}-{% endif %}</td><td><input form="{{ fid }}" name="price" value="{{ pl.price }}" style="width:80px"></td><td><input form="{{ fid }}" name="rprice" value="{{ pl.rprice }}" style="width:80px"></td>
+<td><select form="{{ fid }}" name="active"><option value="1" {{ 'selected' if pl.active }}>Yes</option><option value="0" {{ 'selected' if not pl.active }}>No</option></select></td>
+<td><select form="{{ fid }}" name="oos" style="min-width:120px"><option value="0" {{ 'selected' if not pl.oos }}>✅ In stock</option><option value="1" {{ 'selected' if pl.oos }}>❌ Out of Stock</option></select></td>
+<td>{% if pl.oos %}<span class="bd no">OUT OF STOCK</span><br>{% endif %}{% if pl.api_plan_id %}auto / {{ pl.sold }}<br><span class="mu">{{ 'price: manual' if pl.manual else 'price: auto' }}</span>{% else %}{{ pl.stock if not pl.oos else 0 }} / {{ pl.sold }}<br><a class="lk" href="/plans/{{ pl.id }}">Manage keys</a>{% endif %}</td>
+<td style="white-space:nowrap"><form id="{{ fid }}" method="post" style="display:inline;margin:0"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="plan_id" value="{{ pl.id }}">
+<button name="a" value="saveplan" style="margin:0">Save</button> {% if pl.oos %}<button name="a" value="instock" class="grn" style="margin:0" title="sell this plan again">In stock</button>{% else %}<button name="a" value="outstock" class="red" style="margin:0" title="show Out of Stock in the bot">Out of Stock</button>{% endif %} {% if pl.api_plan_id and pl.manual %}<button name="a" value="autoprice" style="margin:0" title="go back to the automatic % price">Auto</button> {% endif %}<button name="a" value="delplan" class="red" style="margin:0" onclick="return confirm('Delete plan and unsold keys?')">X</button></form></td></tr>{% endfor %}</table></div>
 <div class="card"><h3>Add plans</h3><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="a" value="addplans">
 <div id="rows"></div><button type="button" onclick="addRow()" style="margin:6px 0">+ Add another plan</button>
 <script>function addRow(){var d=document.createElement('div');d.className='row';d.style.cssText='flex-wrap:wrap;gap:6px;margin:8px 0';
@@ -432,11 +437,11 @@ The customer taps a category and sees only the products of that category. Make a
 <label>Premium emoji ID for the button (optional - wins over the normal emoji)</label><input name="eid" inputmode="numeric" placeholder="premium emoji ID" autocomplete="off">
 <label>Sort order (small = first)</label><input name="sort" value="0"><button>Add category</button></form></div>
 <div class="card tw"><h3>Your categories</h3><table><tr><th>Name</th><th>Emoji</th><th>Premium ID</th><th>Sort</th><th>Show</th><th>Products</th><th></th></tr>
-{% for c in rows %}<tr><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="cid" value="{{ c.id }}">
-<td><input name="name" value="{{ c.name }}" style="min-width:150px"></td><td><input name="emoji" value="{{ c.emoji }}" style="width:60px"></td>
-<td><input name="eid" value="{{ c.eid }}" inputmode="numeric" style="min-width:150px" autocomplete="off"></td><td><input name="sort" value="{{ c.sort }}" style="width:60px"></td>
-<td><select name="active"><option value="1" {{ 'selected' if c.active }}>Yes</option><option value="0" {{ 'selected' if not c.active }}>No</option></select></td><td>{{ c.nprod }}</td>
-<td style="white-space:nowrap"><button name="a" value="save" style="margin:0">Save</button> <a href="/categories/{{ c.id }}/assign"><button type="button" class="grn" style="margin:0">Products</button></a> <button name="a" value="del" class="red" style="margin:0" onclick="return confirm('Delete this category? Its products are kept (they move to the other button).')">X</button></td></form></tr>{% endfor %}
+{% for c in rows %}{% set fid = 'catf' ~ c.id %}<tr>
+<td><input form="{{ fid }}" name="name" value="{{ c.name }}" style="min-width:150px"></td><td><input form="{{ fid }}" name="emoji" value="{{ c.emoji }}" style="width:60px"></td>
+<td><input form="{{ fid }}" name="eid" value="{{ c.eid }}" inputmode="numeric" style="min-width:150px" autocomplete="off"></td><td><input form="{{ fid }}" name="sort" value="{{ c.sort }}" style="width:60px"></td>
+<td><select form="{{ fid }}" name="active"><option value="1" {{ 'selected' if c.active }}>Yes</option><option value="0" {{ 'selected' if not c.active }}>No</option></select></td><td>{{ c.nprod }}</td>
+<td style="white-space:nowrap"><form id="{{ fid }}" method="post" style="display:inline;margin:0"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="cid" value="{{ c.id }}"><button name="a" value="save" style="margin:0">Save</button> <a href="/categories/{{ c.id }}/assign"><button type="button" class="grn" style="margin:0">Products</button></a> <button name="a" value="del" class="red" style="margin:0" onclick="return confirm('Delete this category? Its products are kept (they move to the other button).')">X</button></form></td></tr>{% endfor %}
 {% if not rows %}<tr><td colspan="7" class="mu">No category yet.</td></tr>{% endif %}</table></div>
 <div class="card"><h3>Category screen text</h3><form method="post"><input type="hidden" name="csrf" value="{{ csrf() }}"><input type="hidden" name="a" value="text">
 <label>Title (empty = shop name)</label><input name="cat_title" value="{{ gs('cat_title') }}" placeholder="{{ gs('shop_name') }}">
@@ -1182,9 +1187,16 @@ def product_page(pid):
                 manual = old["manual"] if old else 0
                 if old and old["api_plan_id"] and (abs(num(f.get("price")) - old["price"]) > 0.001 or abs(num(f.get("rprice")) - old["rprice"]) > 0.001):
                     manual = 1                      # price edited by hand: auto-sync will not overwrite it
-                c.execute("UPDATE plans SET name=?, price=?, rprice=?, active=?, manual=? WHERE id=? AND product_id=?",
-                          (pname or "Plan", num(f.get("price")), num(f.get("rprice")), 1 if f.get("active") == "1" else 0, manual, int(f.get("plan_id", 0)), pid))
-                flash("Plan saved")
+                oos = 1 if f.get("oos") == "1" else 0
+                c.execute("UPDATE plans SET name=?, price=?, rprice=?, active=?, manual=?, oos=? WHERE id=? AND product_id=?",
+                          (pname or "Plan", num(f.get("price")), num(f.get("rprice")), 1 if f.get("active") == "1" else 0, manual, oos, int(f.get("plan_id", 0)), pid))
+                flash("Plan saved" + (" - ❌ Out of Stock" if oos else ""))
+            elif a in ("outstock", "instock"):          # V22: one-tap Out of Stock / In stock
+                c.execute("UPDATE plans SET oos=? WHERE id=? AND product_id=?", (1 if a == "outstock" else 0, int(f.get("plan_id", 0)), pid))
+                flash("❌ Plan marked Out of Stock" if a == "outstock" else "✅ Plan is In stock again")
+            elif a in ("alloos", "allin"):              # V22: whole product
+                c.execute("UPDATE plans SET oos=? WHERE product_id=?", (1 if a == "alloos" else 0, pid))
+                flash("❌ All plans are Out of Stock" if a == "alloos" else "✅ All plans are In stock")
             elif a == "autoprice":
                 row = c.execute("SELECT base_price FROM plans WHERE id=? AND product_id=? AND api_plan_id>0", (int(f.get("plan_id", 0)), pid)).fetchone()
                 if row:
@@ -1589,7 +1601,6 @@ def panel_products():
     return page("panelprod", tab="panel", rows=rows, rp=("%g" % rp), up=("%g" % up), n_new=sum(1 for r in rows if not r["added"]))
 
 
-@app.route("/panel/add", methods=["POST"])
 @app.route("/rgapi-admin")
 def rgapi_admin():
     q = request.args.get("q", "").strip()
@@ -1597,6 +1608,7 @@ def rgapi_admin():
     return page("rgapiadm", q=q, found=found, on=rgapi.enabled_users(), tab="rgapi", title="RGAPI")
 
 
+@app.route("/panel/add", methods=["POST"])
 def panel_add():
     f = request.form
     ids, plist = None, None

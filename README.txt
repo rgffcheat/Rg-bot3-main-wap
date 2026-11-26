@@ -274,3 +274,19 @@ Files changed: db.py, bot.py, backup.py.   Replace these 3 files (or the whole r
 - Telegram connection pool 10 -> 200 (before, with many users connections were dropped and rebuilt = slow).
 - Worker threads 16 -> 64, so a few slow actions (panel buy, gateway) can not block the other users.
 - Payment checking runs in parallel (one slow gateway call no longer delays the others).
+
+
+================ V22 - PLAN SAVE FIX + OUT OF STOCK + SPEED ================
+Files changed: web.py, db.py, bot.py, rgapi.py  (main.py unchanged - your PREMIUM_EMOJI IDs stay). Replace ALL files and redeploy. Old data is kept.
+1) PRODUCT PAGE SAVE BUG FIXED: after one Save, the other plan Save buttons stopped working until the page was opened again.
+   Cause: each plan row was a <form> inside a table row - after the no-refresh update the browser cut the inputs off the form.
+   Now every row uses its own form id, so you can Save plans again and again without reopening. (Same fix on the Categories table.)
+2) OUT OF STOCK (works for panel/API products too): Website -> Products -> open a product -> Plans table:
+   - "Stock" column: In stock / Out of Stock + Save, or the one-tap red "Out of Stock" / green "In stock" button per plan.
+   - "All plans Out of Stock" / "All plans In stock" for the whole product.
+   Bot shows "❌ (Out of Stock)" on that plan + a red "Out of Stock" button, nobody can buy it (wallet, UPI/QR, Binance, RGAPI).
+   If every plan of a product is out of stock, the shop list shows "Product · Out of Stock". Auto price sync never changes this switch.
+3) SPEED: button taps are answered at once (loading clock stops immediately), Telegram calls retry on a dropped connection and on
+   429 "too many requests" (before, the action was silently lost = "bot not responding"), message deletes run in the background,
+   new database indexes for profile / history / referral / payment lookups.
+4) Bug fix: Panel API -> "Add selected / Add all NEW" pointed to the RGAPI page by mistake - it adds products again.

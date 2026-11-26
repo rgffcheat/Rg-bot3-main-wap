@@ -254,6 +254,8 @@ def api_purchase():
     pl = db.plan(plid)
     if not pl or not pl["active"] or not pl["pactive"]:
         return _err("Plan not found or not available.", 404)
+    if (pl["stock"] or 0) <= 0:                     # V22: out of stock (no keys, or admin marked it Out of Stock)
+        return _err("Out of stock.", 409)
     price = db.price_for(u, pl)
     if price <= 0:
         return _err("Plan not found or not available.", 404)
