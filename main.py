@@ -34,6 +34,7 @@ PREMIUM_EMOJI = {
     "diamond": "6143355606259473869",           # 💎  Spent / lifetime spent
     "check": "6140718118382608136",             # ✅  ID / success
     "cancel": "6152347399466524710",            # ❌  Cancel button
+    "oos": "6152347399466524710",               # ❌  Out of Stock (red cross): plan line, Out of Stock button, checkout, shop list
     "confirm": "4969754504137278548",           # ✅  Confirm button
     "back": "6142931379454745597",              # ➡️  Back buttons
     "download": "6140978646803817445",          # 📥  Download All Keys

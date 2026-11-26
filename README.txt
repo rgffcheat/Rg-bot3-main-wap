@@ -290,3 +290,7 @@ Files changed: web.py, db.py, bot.py, rgapi.py  (main.py unchanged - your PREMIU
    429 "too many requests" (before, the action was silently lost = "bot not responding"), message deletes run in the background,
    new database indexes for profile / history / referral / payment lookups.
 4) Bug fix: Panel API -> "Add selected / Add all NEW" pointed to the RGAPI page by mistake - it adds products again.
+5) PREMIUM ❌ ON OUT OF STOCK: new slot "oos" in main.py PREMIUM_EMOJI (red cross, same ID as the Cancel button).
+   Used on: plan line "(Out of Stock)", the red Out of Stock button, product button in the shop list, checkout screen,
+   and the "Reason: Out of stock" line in ORDER FAILED messages. Change the ID in main.py to use another emoji.
+   (Pop-up alerts after a tap cannot show premium emoji - Telegram limit - they keep the normal ❌.)

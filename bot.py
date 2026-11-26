@@ -637,8 +637,10 @@ def shop_screen(u, cid=None):
     rows = []
     prods = db.products(True, cid)
     for p in prods:
-        tag = "" if p["stock"] else " · Out of Stock"
-        rows.append([B(p["name"] + tag, cb=f"p:{p['id']}", style="primary", ek="cart", eid=db.product_eid(p))])
+        if p["stock"]:
+            rows.append([B(p["name"], cb=f"p:{p['id']}", style="primary", ek="cart", eid=db.product_eid(p))])
+        else:                                   # V22: red premium ❌ on products that are out of stock
+            rows.append([B(p["name"] + " · Out of Stock", cb=f"p:{p['id']}", style="danger", ek="oos")])
     text += (f"{E('shield')} <b>Pick what you want</b> {E('tap')}\nTap any product to see options." if prods
              else "<i>No products available yet.</i>")
     rows.append([B("BACK", cb="shop", style="danger", ek="back")] if cid is not None else [back_btn()])
@@ -660,11 +662,11 @@ def prod_screen(u, pid):
     for n, pl in enumerate(plans):
         price = db.price_for(u, pl)
         br = "└──" if n == len(plans) - 1 else "├──"
-        text += f"{br} {EX(pe, 'time')} {esc(pl['name'])} ➝ {E('money')} {rs(price)}{'' if pl['stock'] > 0 else ' ❌ (Out of Stock)'}\n"
+        text += f"{br} {EX(pe, 'time')} {esc(pl['name'])} ➝ {E('money')} {rs(price)}{'' if pl['stock'] > 0 else f" {E('oos')} <b>(Out of Stock)</b>"}\n"
         if pl["stock"] > 0:
             rows.append([B(f"Buy {pl['name']} · {rs(price)}", cb=f"pl:{pl['id']}", style="success", ek="key", eid=pe)])
         else:
-            rows.append([B(f"{pl['name']} · Out of Stock", cb="oos", style="danger")])
+            rows.append([B(f"{pl['name']} · Out of Stock", cb="oos", style="danger", ek="oos")])
     if plans:
         text += f"\n{E('tap')} <b>CHOOSE A PLAN</b> {E('tap')}"
     else:
@@ -741,7 +743,7 @@ def plan_screen(u, plid):
              f"{E('wallet')} Wallet Balance: <b>{fmt(u, u['balance'])}</b>\n\n")
     rows = []
     if pl["stock"] <= 0:
-        text += "<i>❌ This plan is Out of Stock right now.</i>"
+        text += f"{E('oos')} <b>This plan is Out of Stock right now.</b>\n<i>Please choose another plan or check again later.</i>"
     else:
         text += (f"{E('tap')} <b>Pick how you want to pay:</b>\n"
                  f"Pick any option below. If you have wallet balance, you can pay instantly.")
@@ -1301,7 +1303,7 @@ def refund_text(u, amount, reason, ref, pl=None):
     if pl:
         lines.append(f"{E('c_product')} Product: <b>{esc(pl['pname'])}</b>")
         lines.append(f"{E('c_plan')} Plan: <b>{esc(pl['name'])}</b>")
-    lines += [f"{E('n_note')} Reason: <b>{esc(fail_reason(reason))}</b>",
+    lines += [f"{E('oos') if fail_reason(reason) == 'Out of stock' else E('n_note')} Reason: <b>{esc(fail_reason(reason))}</b>",
               f"{E('n_money')} Refunded: <b>{fmt(u, amount)}</b>",
               f"{E('n_wallet')} Wallet balance: <b>{fmt(u, u['balance'])}</b>",
               f"{E('n_id')} Order Ref: <code>{esc(ref)}</code>"]
@@ -1320,7 +1322,7 @@ def wallet_fail_text(u, price, reason, ref, pl=None):
     if pl:
         lines.append(f"{E('c_product')} Product: <b>{esc(pl['pname'])}</b>")
         lines.append(f"{E('c_plan')} Plan: <b>{esc(pl['name'])}</b>")
-    lines += [f"{E('n_note')} Reason: <b>{esc(fail_reason(reason))}</b>",
+    lines += [f"{E('oos') if fail_reason(reason) == 'Out of stock' else E('n_note')} Reason: <b>{esc(fail_reason(reason))}</b>",
               f"{E('n_wallet')} Wallet balance: <b>{fmt(u, u['balance'])}</b> (unchanged)",
               f"{E('n_id')} Order Ref: <code>{esc(ref)}</code>"]
     return (f"{E('cancel')} <b>ORDER FAILED — NOTHING CHARGED</b>\n{LINE}\n\n"
